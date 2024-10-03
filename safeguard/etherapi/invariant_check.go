@@ -19,4 +19,6 @@ type InvariantChecker interface {
 	OnPause()
 
 	OnDispose()
+
+	SetLogLevel(int)
 }
