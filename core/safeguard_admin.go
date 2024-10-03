@@ -42,39 +42,36 @@ func (s *safeguardState) unpause() {
 }
 
 // acquires and releases lock in s
-func (s *safeguardState) reload(p string) {
+func (s *safeguardState) reload(p string) error {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	plug, err := plugin.Open(p)
 	if err != nil {
-		fmt.Printf("Failed to load plugin from %s: %s; pausing checking\n", p, err)
 		s.pause()
-		return
+		return fmt.Errorf("Failed to load plugin from %s: %s; pausing checking", p, err)
 	}
 	sym, err := plug.Lookup("Detector")
 	if err != nil {
-		fmt.Printf("Failed to find detector implementation in %s: %s; pausing checking\n", p, err)
 		s.pause()
-		return
+		return fmt.Errorf("Failed to find detector implementation in %s: %s; pausing checking", p, err)
 	}
 	impl, ok := sym.(etherapi.InvariantChecker)
 	if !ok {
-		fmt.Printf("Detector from %p was not an InvariantChecker, pausing checking\n", p)
 		s.pause()
-		return
+		return fmt.Errorf("Detector from %p was not an InvariantChecker, pausing checking", p)
 	}
 	fmt.Printf("Successfully loaded new implementation, updating pointer, and enabling\n")
 	s.enabled = true
 	s.impl = impl
+	return nil
 }
 
 // acquires and releases lock in s
-func (s *safeguardState) flipActivate() {
+func (s *safeguardState) flipActivate() error {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	if s.impl == nil {
-		fmt.Printf("Refusing to change status, no plugin loaded\n")
-		return
+		return fmt.Errorf("Refusing to change status, no plugin loaded")
 	}
 	currentlyEnabled := s.enabled
 	if currentlyEnabled {
@@ -83,18 +80,18 @@ func (s *safeguardState) flipActivate() {
 		s.unpause()
 	}
 	fmt.Printf("Enabled status changed: %t -> %t\n", currentlyEnabled, s.enabled)
-	return
+	return nil
 }
 
 // acquires and releases lock in s
-func (s *safeguardState) setLogLevel(l slog.Level) {
+func (s *safeguardState) setLogLevel(l slog.Level) error {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	if s.impl == nil {
-		fmt.Print("Refusing to set log level: no plugin loaded\n")
-		return
+		return fmt.Errorf("Refusing to set log level: no plugin loaded")
 	}
 	s.impl.SetLogLevel(l)
+	return nil
 }
 
 func initSafeguardSignals() {
@@ -143,9 +140,9 @@ type SafeguardAdminMessage struct {
 }
 
 // Callback types
-type ReloadCallback func(string)
-type PauseCallback func()
-type SetLogCallback func(string)
+type ReloadCallback func(string) error
+type PauseCallback func() error
+type SetLogCallback func(string) error
 
 // safeguardAdminServer struct
 type safeguardAdminServer struct {
@@ -198,9 +195,6 @@ func (s *safeguardAdminServer) start() error {
 	return nil
 }
 
-const rejectedMessage = "{\"success\": false}"
-const acceptedMessage = "{\"success\": true}"
-
 func tryLoadInitial() {
 	_, exists := os.LookupEnv(StartupLoadEnv)
 	// initial load not requested
@@ -219,11 +213,25 @@ func loadInitial() {
 	safeguardImpl.reload(p)
 }
 
+const rejectedMessage = "{\"success\": false}"
+const acceptedMessage = "{\"success\": true}"
+
 // handleConnection processes incoming messages
 func (s *safeguardAdminServer) handleConnection(conn net.Conn) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(conn)
+
+	reject := func(err error) {
+		msg, err := json.Marshal(map[string]interface{}{
+			"success": false,
+			"message": err.Error(),
+		})
+		if err != nil {
+			fmt.Printf("Had an error writing an error %w: how ironic!\n", err)
+		}
+		writer.Write(msg)
+	}
 
 	for {
 		messageBytes, err := reader.ReadBytes('\n')
@@ -240,7 +248,6 @@ func (s *safeguardAdminServer) handleConnection(conn net.Conn) {
 			fmt.Println("failed to unmarshal message:", err)
 			continue
 		}
-
 		switch message.Type {
 		case MessageTypeReload:
 			filePath := strings.TrimSpace(message.Data)
@@ -248,32 +255,41 @@ func (s *safeguardAdminServer) handleConnection(conn net.Conn) {
 				writer.WriteString(rejectedMessage)
 				continue
 			}
-			s.h.reloadCallback(filePath)
+			err = s.h.reloadCallback(filePath)
 		case MessageTypePause:
-			s.h.pauseCallback()
+			err = s.h.pauseCallback()
 		case MessageTypeLog:
 			logLevel := strings.TrimSpace(message.Data)
-			s.h.setLogCallback(logLevel)
+			err = s.h.setLogCallback(logLevel)
 		default:
 			fmt.Println("unknown message type:", message.Type)
 			writer.WriteString(rejectedMessage)
 			return
 		}
-		writer.WriteString(acceptedMessage)
+		if err != nil {
+			fmt.Printf("Error executing action %s: %w", message, err)
+			reject(err)
+		} else {
+			writer.WriteString(acceptedMessage)
+		}
 	}
 }
 
 var stdHandler adminHandler = adminHandler{
-	reloadCallback: func(s string) {
-		safeguardImpl.reload(s)
+	reloadCallback: func(s string) error {
+		return safeguardImpl.reload(s)
 	},
-	pauseCallback: func() {
-		safeguardImpl.flipActivate()
+	pauseCallback: func() error {
+		return safeguardImpl.flipActivate()
 	},
-	setLogCallback: func(s string) {
+	setLogCallback: func(s string) error {
 		var p slog.Level
-		p.UnmarshalText([]byte(s))
+		err := p.UnmarshalText([]byte(s))
+		if err == nil {
+			return err
+		}
 		safeguardImpl.setLogLevel(p)
+		return nil
 	},
 }
 

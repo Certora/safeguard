@@ -18,12 +18,19 @@ if [ $GO_BIN ]; then
     GO=$GO_BIN
 fi
 
-PLUGIN_OBJ=$(realpath $PLUGIN_PATH/safeguard.so)
+
+output=safeguard.so
+PLUGIN_OBJ=$(realpath $PLUGIN_PATH/$output)
+if [ $SAFEGUARD_OBJ_PATH ]; then
+    output=$SAFEGUARD_OBJ_PATH
+    PLUGIN_OBJ=$output
+fi
+
 
 head_hash=$(git rev-parse HEAD)
 commit_date=$(git show -s --format=%ci "$head_hash" | cut -d ' ' -f 1 | sed 's/-//g')
 
-(cd $PLUGIN_PATH; GOMODCACHE=/tmp/go-cache $GO build -ldflags "-X github.com/ethereum/go-ethereum/internal/version.gitCommit=$head_hash -X github.com/ethereum/go-ethereum/internal/version.gitDate=$commit_date -extldflags '-Wl,-z,stack-size=0x800000'" -tags urfave_cli_no_docs,ckzg -buildmode=plugin -trimpath -v  -o safeguard.so .)
+(cd $PLUGIN_PATH; GOMODCACHE=/tmp/go-cache $GO build -ldflags "-X github.com/ethereum/go-ethereum/internal/version.gitCommit=$head_hash -X github.com/ethereum/go-ethereum/internal/version.gitDate=$commit_date -extldflags '-Wl,-z,stack-size=0x800000'" -tags urfave_cli_no_docs,ckzg -buildmode=plugin -trimpath -v  -o $output .)
 
 if [ $? -ne 0 ]; then
     echo "Build failed, not trying to redeploy"

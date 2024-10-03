@@ -41,8 +41,8 @@ to load the plugin.
 
 Each geth instance can run exactly one detector; multiplexed checking is not supported currently. There are three loading modes, which primarily control how the dynamic reloading/admin of the plugin works.
 
-The mode used by the geth instance is determined by the SAFEGUARD_MODE environment variable, which can take one of three values `STATIC`, `SOCKET`, or `SIGNAL`. Any other value is ignored and no plugin loading 
-will be done. The behavior and configuration of these three modes is described below.
+The mode used by the geth instance is determined by the SAFEGUARD_MODE environment variable, which can take one of four values: `STATIC`, `SOCKET`, `NET`, or `SIGNAL`. Any other value is ignored and no 
+plugin loading will be done. The behavior and configuration of these three modes is described below.
 
 ### STATIC mode
 
@@ -77,23 +77,41 @@ for looking at the console output of the geth process. If `SIGUSR2` is delivered
 In this mode, plugin loading and administration is controlled via an IPC socket. At startup time, geth creates a named socket at the path indicated by the environment variable `SAFEGUARD_SOCKET_PATH`.
 If this environment variable is not set, or no socket can be created at that path, no loading or administration is possible and geth will have to be restarted.
 
-The socket listens for JSON formatted messages. Each JSON message is a dictionary that must at least include the key "type". The action taken by the geth process is determined by
-the value of `type`. 
+The socket listens for JSON formatted messages. The JSON messages must conform to the admin message schema (see below):
+the actions taken for each message is defined along with the schema.
 
-If the value is the string `PAUSE`, then the message has the effect of delivering `SIGUSR2` in `SIGNAL` mode: the detector's paused status is toggled, or the
-message is ignored if no plugin has been loaded.
+### NET mode
 
-If the value is the string `RELOAD`, then the dictionary must also include a key `data`. The value associated with this key must be a string, which is expected to be the filepath
-of the plugin to load. The plugin at this path is loaded, validated, and then enabled. If any validation steps fail (including because the plugin wasn't actually new) detecting is automatically
-paused.
+In this mode, plugin loading and administration is controlled via TPC connections on a specific port. At startup time, 
+geth will read the `SAFEGUARD_ADMIN_PORT` environment variable and parses it as an integer, to be used
+as the port to listen on. If the parsing fails, the admin server is not started. If `SAFEGUARD_ADMIN_PORT` is not
+present, then the default port, 6969 is used.
+
+Geth will then start listening for TCP connections on the specific (or default) port. This port is used to accept **raw**
+TCP connections: do **not** send HTTP requests, the admin serverwill not know what to do with them.
+Like the socket admin server,
+the payloads of these TCP messages are expected to be a json encoded string conforming to the admin message schema (see 
+below).
 
 ### Build script and dynamic reloading
 
 The `build_plugin.sh` script looks at the `SAFEGUARD_MODE` environment variable to try to automatically reload the plugin (assuming the build succeeded). If `SAFEGUARD_MODE` is unset or `STATIC`,
-it will not try to dynamically reload. Otherwise, it will try to use signals/sockets to communicate that the plugin should be reloaded. For this process to work, `SAFEGUARD_MODE` and other
-variables (like `SAFEGUARD_SOCKET_PATH`) must be set to the same values used for launching geth. If you change `SAFEGUARD_MODE` or `SAFEGUARD_SOCKET_PATH`, reloading will not work, and in fact, if you change
-to `SIGNAL` mode, geth will take the default action on `SIGUSR1/2`, which is to shut down. Use case, and only rely on this for development.
+it will not try to dynamically reload. Otherwise, it will try to use signals/sockets/tcp connectsion
+to communicate that the plugin should be reloaded. For this process to work, `SAFEGUARD_MODE` and other
+variables (like `SAFEGUARD_SOCKET_PATH`) must be set to the same values used for launching geth. If you change the values 
+of these variables, reloading will not work, and in fact, if you change
+to `SIGNAL` mode, geth will take the default action on `SIGUSR1/2`, which is to shut down. Use caution, and only rely on this for development.
 
+### Initial loading
+
+By default, the `SIGNAL`, `NET`, and `SOCKET` administration modes do not load the plugin at startup time, but wait for
+the reload message. If, however, the environment variable `SAFEGUARD_LOAD_INITIAL` is set (to any value, it just needs 
+to be set) then the plugin indicated by the `SAFEGUARD_PLUGIN_PATH` environment variable is loaded. If 
+`SAFEGUARD_PLUGIN_PATH` is not set, then the `SAFEGUARD_LOAD_INITIAL` is ignored. NB that in static linking mode, 
+`SAFEGUARD_LOAD_INITIAL` is ignored: the management mode indicates that the load *must* occur.
+
+If this initial plugin loading fails (because the object file is not correct, or `SAFEGUARD_PLUGIN_PATH` is not set),
+new implementations can still be loaded according to the administration method selected (signals, sockets, etc.)
 
 ## Different Plugins
 
@@ -107,10 +125,32 @@ Go determines that a plugin is distinct from any existing plugins using two chec
 
 If either of these checks are unsatisfied, then the plugin loading will fail with the message "plugin already loaded".
 
+## Admin Message Schema
+
+Each admin message is a JSON dictionary that must at least include the key "type".
+The action taken by the geth process is determined by the value of `type`. 
+
+If `type`'s value is the string `PAUSE`, then the message has the effect of delivering `SIGUSR2` in `SIGNAL` mode: the detector's paused status is toggled, or the message is ignored if no plugin has been loaded.
+
+If the value is the string `RELOAD`, then the dictionary must also include a key `data`.
+The value associated with this key must be a string, which is expected to be the filepath of the plugin to load.
+The plugin at this path is loaded, validated, and then enabled.
+If any validation steps fail (including because the plugin wasn't actually new) detecting is automatically paused.
+Note that the same caveats as `SIGUSR1` apply here: this request is *not* idempotent, and sending two duplicate reload
+messages without changing the plugin object will cause a load failure and detecting to be paused.
+
+If the value `LOG`, then the dictionary must also include a key `data`. The associated value is expected to be a string
+indicating a log level, one of: `DEBUG`, `INFO`, `WARN`, or `ERROR`. If string is not one of these, the message
+is rejected. If the log level is valid, then the currently loaded plugin is requested to set its log output level
+to the indicated level. This choice does *not* persist across dynamic reloads. The plugin may, or may not, respect
+this request.
+
+If the message was successfully processed, then the server will return (either on the TCP connection or the socket)
+to the client the string `{"success": true}`. If the message was rejected for any reason, it will return
+`{"success":false, "message": ...}`, where `"message"` indicates some reason for why the message was rejected.
+
 
 ## Runtime Environment Variables
 
-- `CERT_HTTP_API_URL` - HTTPS endpoint for the Python server (example: `https://676im49e3m.execute-api.us-west-2.amazonaws.com/prod/`)
+- `CERT_HTTP_API_URL` - HTTPS endpoint for the Python server (example: `https://676im49e3m.execute-api.us-west-2.amazonaws.com/prod/`). If not configured, defaults to `localhost:5000`
 - `CERT_CLIENT_ID` - string ID that should be included either in the `X-Correlation-ID` header or inside the message body while communicating with the server. 
-
-
