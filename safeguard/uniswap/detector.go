@@ -6,11 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math/big"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -73,59 +71,6 @@ func normalizeHexString(hexStr string) string {
 	return hexStr
 }
 
-var prankCache map[string]string
-var tryPrank bool = false
-var prankLoaded bool = false
-
-func getOrPrank(url string) (io.Reader, error) {
-	if !prankLoaded {
-		file := os.Getenv("PRANK_URLS")
-		if file != "" {
-			data, err := os.ReadFile(file)
-			if err == nil {
-				err = json.Unmarshal(data, &prankCache)
-				if err == nil {
-					tryPrank = true
-				}
-			}
-		}
-		prankLoaded = true
-	}
-	if !tryPrank {
-		panic("John did you fuck up? we didn't load the pranks")
-		tryPrank = false
-		resp, err := http.Get(url)
-		if err != nil {
-			return nil, err
-		}
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			return nil, fmt.Errorf("Server responded with status code %s", resp.Status)
-		}
-		return resp.Body, nil
-	}
-	contents, exists := prankCache[url]
-	if !exists {
-		return nil, fmt.Errorf("'Server' didn't have response for %s", url)
-	}
-	return strings.NewReader(contents), nil
-}
-
-func queryJsonEndpoint[T any](endPoint string, target *T) error {
-	b, err := getOrPrank(fmt.Sprintf("http://localhost:5000/%s", endPoint))
-	if err != nil {
-		panic(fmt.Sprintf("Failed to parse thing %s", err))
-	}
-	if rc, ok := b.(io.ReadCloser); ok {
-		defer rc.Close()
-	}
-	err = json.NewDecoder(b).Decode(target)
-	if err != nil {
-		return fmt.Errorf("Failed to parse http respose %s", err)
-	}
-	return nil
-}
-
 func poolDataOfDict(poolDict map[string]interface{}) (common.Hash, PoolData) {
 	poolKey := poolDict["key"].(string)
 	key := common.HexToHash(poolKey)
@@ -151,7 +96,7 @@ POST:
 */
 func (st *InvariantState) loadTokenPools(tokenAddress common.Address, bc etherapi.BlockScanner, currBlock uint64) ([]common.Hash, error) {
 	result := make(map[string]interface{})
-	err := queryJsonEndpoint(fmt.Sprintf("token-pools?token=%s", strings.ToLower(tokenAddress.Hex())), &result)
+	err := etherapi.QueryJsonEndpoint(fmt.Sprintf("token-pools?token=%s", strings.ToLower(tokenAddress.Hex())), &result)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to fetch pools for token %s: %s", tokenAddress, err)
 	}
@@ -250,7 +195,7 @@ POST STATE INVARIANTS:
 */
 func (st *InvariantState) getMonitoredPools(bc etherapi.BlockScanner, currBlock uint64) ([]common.Hash, []common.Hash, error) {
 	var tokenItems []interface{}
-	err := queryJsonEndpoint("token-targets", &tokenItems)
+	err := etherapi.QueryJsonEndpoint("token-targets", &tokenItems)
 	if err != nil {
 		return nil, nil, fmt.Errorf("Failed to get token targets %s", err)
 	}
@@ -305,7 +250,7 @@ func (st *InvariantState) getMonitoredPools(bc etherapi.BlockScanner, currBlock 
 	}
 
 	var poolItems []interface{}
-	err = queryJsonEndpoint("pool-targets", &poolItems)
+	err = etherapi.QueryJsonEndpoint("pool-targets", &poolItems)
 	if err != nil {
 		return nil, nil, fmt.Errorf("Failed to get pool targets %s", err)
 	}
@@ -408,7 +353,7 @@ func (st *InvariantState) loadInitialPositions(pool common.Hash, bc etherapi.Blo
 	start := time.Now()
 	root := map[string]interface{}{}
 
-	err := queryJsonEndpoint(fmt.Sprintf("pool-positions?key=%s", strings.ToLower(pool.Hex())), &root)
+	err := etherapi.QueryJsonEndpoint(fmt.Sprintf("pool-positions?key=%s", strings.ToLower(pool.Hex())), &root)
 	if err != nil {
 		return false, err
 	}
@@ -1174,8 +1119,6 @@ func invariantChecks(
 }
 
 func postUpdate(endPointName string, keyHex string, checkResults map[string]interface{}) error {
-	endpoint := fmt.Sprintf("http://127.0.0.1:5000/%s?key=%s", endPointName, keyHex)
-	return sendUpdateToEndpoint(
-		endpoint, checkResults,
-	)
+	endpoint := fmt.Sprintf("%s?key=%s", endPointName, keyHex)
+	return etherapi.PostUpdate(endpoint, checkResults)
 }
