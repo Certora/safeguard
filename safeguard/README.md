@@ -103,6 +103,7 @@ Go determines that a plugin is distinct from any existing plugins using two chec
    Thus, by updating the symlink to a new, unique path, this check can be satisfied.
 2. The plugin must have a unique "plugin path" from any previously loaded plugin. This "plugin path" is *not* the same thing as the file path. Rather, it is an internally generated
    identifier for the package/module holding the plugin name (analogous to the fully qualified package name of a class on the JVM). The plugin path is automatically inferred from the folder
+   in which the plugin is built, the `build_plugin` script automatically sets up folder paths to ensure this path is unique for each build.
 
 If either of these checks are unsatisfied, then the plugin loading will fail with the message "plugin already loaded".
 
@@ -111,6 +112,5 @@ If either of these checks are unsatisfied, then the plugin loading will fail wit
 
 - `CERT_HTTP_API_URL` - HTTPS endpoint for the Python server (example: `https://676im49e3m.execute-api.us-west-2.amazonaws.com/prod/`)
 - `CERT_CLIENT_ID` - string ID that should be included either in the `X-Correlation-ID` header or inside the message body while communicating with the server. 
-   in which the plugin is built, the `build_plugin` script automatically sets up folder paths to ensure this path is unique for each build.
 
 

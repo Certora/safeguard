@@ -68,7 +68,7 @@ func QueryJsonEndpoint[T any](endPoint string, target *T) error {
 	return nil
 }
 
-var nodeId = os.Getenv("SAFEGUARD_NODE_ID")
+var nodeId = os.Getenv("CERT_CLIENT_ID")
 
 func sendUpdateToEndpoint(
 	endpointURL string,
@@ -77,12 +77,12 @@ func sendUpdateToEndpoint(
 	// Create the payload
 	payload := make(map[string]interface{})
 	for k, v := range checkResults {
-		if k == "node_id" {
-			return fmt.Errorf("Update already includes node_id %s, cannot tag result", v)
+		if k == "client_id" {
+			return fmt.Errorf("Update already includes client_id %s, cannot tag result", v)
 		}
 		payload[k] = v
 	}
-	payload["node_id"] = nodeId
+	payload["client_id"] = nodeId
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("failed to marshal payload: %w", err)
