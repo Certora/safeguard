@@ -17,21 +17,10 @@
 package core
 
 import (
-	"bufio"
 	"container/list"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math/big"
-	"net"
-	"os"
-	"os/signal"
-	"plugin"
-	"strings"
-	"sync"
-	"syscall"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/misc"
@@ -64,9 +53,7 @@ func NewStateProcessor(config *params.ChainConfig, chain *HeaderChain) *StatePro
 func (bc *BlockChain) ScanBlocks(lastJsonBlock uint64, ordered bool, cb func([]*types.Log) error) error {
 	currHead := bc.CurrentBlock()
 	currBlockNum := currHead.Number.Uint64()
-	fmt.Printf("Seen %d vs %d\n", lastJsonBlock, currBlockNum)
 	if currBlockNum > lastJsonBlock {
-		blockMineStart := time.Now()
 		logList := list.New()
 		headerIt := currHead
 		blockNum := currHead.Number.Uint64()
@@ -103,239 +90,9 @@ func (bc *BlockChain) ScanBlocks(lastJsonBlock uint64, ordered bool, cb func([]*
 				}
 			}
 		}
-		fmt.Printf("Scanned %d blocks in %s\n", scannedBlocks, time.Since(blockMineStart))
 	}
 	return nil
 }
-
-type safeguardState struct {
-	lock    sync.Mutex
-	enabled bool
-	impl    etherapi.InvariantChecker
-}
-
-var safeguardImpl safeguardState
-
-// must be called holding the lock in s
-func (s *safeguardState) pause() {
-	old := s.enabled
-	s.enabled = false
-	if s.impl != nil && old {
-		s.impl.OnPause()
-	}
-
-}
-
-// must be called holding the lock in s
-func (s *safeguardState) unpause() {
-	s.enabled = true
-}
-
-// acquires and releases lock in s
-func (s *safeguardState) reload(p string) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	plug, err := plugin.Open(p)
-	if err != nil {
-		fmt.Printf("Failed to load plugin from %s: %s; pausing checking\n", p, err)
-		s.pause()
-		return
-	}
-	sym, err := plug.Lookup("Detector")
-	if err != nil {
-		fmt.Printf("Failed to find detector implementation in %s: %s; pausing checking\n", p, err)
-		s.pause()
-		return
-	}
-	impl, ok := sym.(etherapi.InvariantChecker)
-	if !ok {
-		fmt.Printf("Detector from %p was not an InvariantChecker, pausing checking\n", p)
-		s.pause()
-		return
-	}
-	fmt.Printf("Successfully loaded new implementation, updating pointer, and enabling\n")
-	s.enabled = true
-	s.impl = impl
-}
-
-// acquires and releases lock in s
-func (s *safeguardState) flipActivate() {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	if s.impl == nil {
-		fmt.Printf("Refusing to change status, no plugin loaded\n")
-		return
-	}
-	currentlyEnabled := s.enabled
-	if currentlyEnabled {
-		s.pause()
-	} else {
-		s.unpause()
-	}
-	fmt.Printf("Enabled status changed: %t -> %t\n", currentlyEnabled, s.enabled)
-	return
-}
-
-func initSafeguardSignals() {
-	fmt.Printf("Setting up signal handlers for process %d\n", os.Getpid())
-	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, syscall.SIGUSR2, syscall.SIGUSR1)
-	go func(ch chan os.Signal) {
-		for s := range ch {
-			if s == syscall.SIGUSR1 {
-				fmt.Printf("Got request to update checking\n")
-				func() {
-					p := os.Getenv("SAFEGUARD_PLUGIN_PATH")
-					if p == "" {
-						fmt.Printf("No safeguard plugin path specified, ignoring load request\n")
-						return
-					}
-					safeguardImpl.reload(p)
-				}()
-			} else if s == syscall.SIGUSR2 {
-				fmt.Printf("Got request to pause/unpause checking\n")
-				safeguardImpl.flipActivate()
-			} else {
-				fmt.Printf("Unexpected signal delivered %s, ignoring\n", s)
-			}
-		}
-	}(signalChan)
-}
-
-// Message types
-const (
-	MessageTypeReload = "RELOAD"
-	MessageTypePause  = "PAUSE"
-	PluginPathEnv     = "SAFEGUARD_PLUGIN_PATH"
-	AdminPathEnv      = "SAFEGUARD_SOCKET_PATH"
-	SafeguardModeEnv  = "SAFEGUARD_MODE"
-)
-
-// Message struct for IPC
-type SafeguardAdminMessage struct {
-	Type string `json:"type"`
-	Data string `json:"data,omitempty"`
-}
-
-// Callback types
-type ReloadCallback func(string)
-type PauseCallback func()
-
-// safeguardAdminServer struct
-type safeguardAdminServer struct {
-	reloadCallback ReloadCallback
-	pauseCallback  PauseCallback
-	socketPath     string
-}
-
-// NewIPCServer creates a new IPC server
-func newAdminServer(socketPath string, reload ReloadCallback, pause PauseCallback) *safeguardAdminServer {
-	return &safeguardAdminServer{
-		reloadCallback: reload,
-		pauseCallback:  pause,
-		socketPath:     socketPath,
-	}
-}
-
-// Start begins listening for IPC messages
-func (s *safeguardAdminServer) start() error {
-	// Clean up the socket if it already exists
-	if _, err := os.Stat(s.socketPath); !os.IsNotExist(err) {
-		if err := os.Remove(s.socketPath); err != nil {
-			return fmt.Errorf("failed to remove existing socket @ %s: %w", s.socketPath, err)
-		}
-	}
-
-	listener, err := net.Listen("unix", s.socketPath)
-	if err != nil {
-		return fmt.Errorf("failed to listen on socket @ %s: %w", s.socketPath, err)
-	}
-
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				fmt.Println("failed to accept connection:", err)
-				continue
-			}
-			go s.handleConnection(conn)
-		}
-	}()
-
-	return nil
-}
-
-// handleConnection processes incoming messages
-func (s *safeguardAdminServer) handleConnection(conn net.Conn) {
-	defer conn.Close()
-	reader := bufio.NewReader(conn)
-
-	for {
-		messageBytes, err := reader.ReadBytes('\n')
-		if err == io.EOF {
-			return
-		}
-		if err != nil {
-			fmt.Println("failed to read message:", err)
-			return
-		}
-
-		var message SafeguardAdminMessage
-		if err := json.Unmarshal(messageBytes, &message); err != nil {
-			fmt.Println("failed to unmarshal message:", err)
-			continue
-		}
-
-		switch message.Type {
-		case MessageTypeReload:
-			filePath := strings.TrimSpace(message.Data)
-			s.reloadCallback(filePath)
-		case MessageTypePause:
-			s.pauseCallback()
-		default:
-			fmt.Println("unknown message type:", message.Type)
-		}
-	}
-}
-
-func initSafeguardSocket() {
-	socketPath, exists := os.LookupEnv(AdminPathEnv)
-	if !exists {
-		fmt.Printf("Socket mode requested, but %s not set: taking no further action\n", AdminPathEnv)
-	}
-	reload := func(p string) {
-		safeguardImpl.reload(p)
-	}
-	pause := func() {
-		safeguardImpl.flipActivate()
-	}
-	server := newAdminServer(socketPath, reload, pause)
-	err := server.start()
-	if err != nil {
-		fmt.Printf("Failed to start server: %w, taking no further action\n")
-	}
-}
-
-func init() {
-	management, present := os.LookupEnv(SafeguardModeEnv)
-	if !present {
-		fmt.Printf("%s not set, taking no further action\n", SafeguardModeEnv)
-	}
-	if management == "SIGNAL" {
-		initSafeguardSignals()
-	} else if management == "SOCKET" {
-		initSafeguardSocket()
-	} else if management == "STATIC" {
-		p, exists := os.LookupEnv(PluginPathEnv)
-		if !exists {
-			fmt.Print("Requested static linking, but %s not set, taking no further action\n", PluginPathEnv)
-		}
-		safeguardImpl.reload(p)
-	} else {
-		fmt.Printf("Unrecognized safeguard mode: %s, ignoring and taking no further action\n", management)
-	}
-}
-
 
 // Process processes the state changes according to the Ethereum rules by running
 // the transaction messages using the statedb and applying any rewards to both

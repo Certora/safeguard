@@ -1,6 +1,7 @@
 package etherapi
 
 import (
+	"log/slog"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/core/state"
@@ -20,5 +21,5 @@ type InvariantChecker interface {
 
 	OnDispose()
 
-	SetLogLevel(int)
+	SetLogLevel(l slog.Level)
 }
