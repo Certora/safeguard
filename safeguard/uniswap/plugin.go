@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log/slog"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/core/state"
@@ -27,6 +28,10 @@ func (u UniswapDetector) OnPause() {
 func (u UniswapDetector) OnDispose() {
 	// help out the GC?
 	safeguardState.Reset()
+}
+
+func (u UniswapDetector) SetLogLevel(l slog.Level) {
+	levelVar.Set(l)
 }
 
 var Detector UniswapDetector

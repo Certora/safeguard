@@ -183,7 +183,6 @@ func (s *safeguardAdminServer) start() error {
 	}
 
 	go func() {
-		defer listener.Close()
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
@@ -277,7 +276,7 @@ func (s *safeguardAdminServer) handleConnection(conn net.Conn) {
 			return
 		}
 		if err != nil {
-			fmt.Printf("Error executing action %s: %w", message, err)
+			fmt.Printf("Error executing action %s: %s\n", message, err)
 			reject(err)
 		} else {
 			accept()
