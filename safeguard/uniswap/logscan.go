@@ -78,6 +78,10 @@ func (pe *positionExtractor) poolFilter(pool common.Hash) bool {
 	return pool == pe.pool
 }
 
+func (pe *positionExtractor) onTransfer(token, to, from common.Address, amount *uint256.Int) {
+	panic("do not call me")
+}
+
 func (pe *positionExtractor) onSwap(pool common.Hash) {
 	panic("do not call me")
 }

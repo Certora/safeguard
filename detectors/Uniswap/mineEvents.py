@@ -34,6 +34,7 @@ def extract_position_hash(keys):
 
 modify_topic = "0xf208f4912782fd25c7f114ca3723a2d5dd6f3bcc3ac8db5af63baa85f711d5ec"
 initialize_topic = "0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438"
+transfer_topic = "0x1b3d7edb2e9c0b0e7c525b20aaaef0f5940d2ed71663c7d39266ecafac728859"
 
 throttle_limit = 1.0 / cps
 throttle_limit += throttle_limit / 2
@@ -115,6 +116,21 @@ def scan_positions(args):
     with open(args.output, 'w') as f:
         f.write(json.dumps(output, indent = "  "))
 
+def scan_transfers(args):
+    address_list = set()
+    def parse_transfer(log_item):
+        to = log_item["topics"][2]
+        address_list.add(to)
+    max_block = parse_logs(args, transfer_topic, parse_transfer, topic3=args.mode_arg)
+    payload = list(address_list)
+    output = {
+        "done": True,
+        "lastBlock": max_block,
+        "payload": payload
+    }
+    with open(args.output, 'w') as f:
+        f.write(json.dumps(output, indent = "  "))
+
 def scan_pools(args):
     to_ret = []
     def parse_pool_info(log_data):
@@ -161,6 +177,8 @@ def main():
         scan_pools(args)
     elif args.mode == "positions":
         scan_positions(args)
+    elif args.mode == "transfers":
+        scan_transfers(args)
     else:
         print(f"Unknown mode{args.mode}")
         sys.exit(1)

@@ -36,10 +36,15 @@ def main(address, api_token, token_list):
         url_token = "0x" + token[-40:]
         url = f"http://localhost:5000/token-pools?token={url_token}"
         
+
+        transfer_url = f"http://localhost:5000/token-transfers?token={url_token}"
         try:
             output = run_mine_events(address, api_token, 'pools', token)
             data = json.loads(output)
             
+            transfer_output = run_mine_events(address, api_token, "transfers", token)
+            result[transfer_url] = transfer_output
+
             # Add the token pools result to the JSON
             result[url] = output
 

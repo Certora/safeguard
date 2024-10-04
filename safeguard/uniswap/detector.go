@@ -172,18 +172,106 @@ var levelVar slog.LevelVar
 
 var logger = slog.New(getHandler(&levelVar))
 
-var poolSlot = uint256.NewInt(6)
+type storageOffsetsT struct {
+	// base slots
+	protocolFeesAccruedSlot, balanceOfSlot, poolSlot *uint256.Int
 
-func poolDataOfDict(poolDict map[string]interface{}) (common.Hash, PoolData) {
-	poolKey := poolDict["key"].(string)
-	key := common.HexToHash(poolKey)
-	return key, PoolData{
-		tickSpacing: int(poolDict["tickSpacing"].(float64)),
-		fee:         uint64(poolDict["fee"].(float64)),
-		currency0:   common.HexToAddress(poolDict["currency0"].(string)),
-		currency1:   common.HexToAddress(poolDict["currency1"].(string)),
-		hooks:       common.HexToAddress(poolDict["hooks"].(string)),
+	// offsets within pool state
+	positionsOffset, tickOffset, feeGrowthGlobal0Offset, feeGrowthGlobal1OffsetFrom0, liquidityOffset uint64
+
+	// offsets within tick state
+	tickFeeGrowth0Offset, tickFeeGrowth1OffsetFrom0 uint64
+
+	// offsets within position
+	feeGrowthInside0Offset, feeGrowthInside1Offset uint64
+}
+
+var storageOffsets = storageOffsetsT{
+	poolSlot:                uint256.NewInt(6),
+	protocolFeesAccruedSlot: uint256.NewInt(1),
+	balanceOfSlot:           uint256.NewInt(4),
+
+	positionsOffset:             6,
+	tickOffset:                  4,
+	feeGrowthGlobal0Offset:      1,
+	feeGrowthGlobal1OffsetFrom0: 1,
+	liquidityOffset:             3,
+
+	tickFeeGrowth0Offset:      2,
+	tickFeeGrowth1OffsetFrom0: 1,
+
+	feeGrowthInside0Offset: 1,
+	feeGrowthInside1Offset: 2,
+}
+
+func getKeyAs[T any](poolDict map[string]interface{}, key string, err error) (T, error) {
+	var ret T
+	// monads, but shit
+	if err != nil {
+		return ret, err
 	}
+	res, exists := poolDict[key]
+	if !exists {
+		return ret, fmt.Errorf("Key %s not found", key)
+	}
+	p, ok := res.(T)
+	if !ok {
+		return ret, fmt.Errorf("Incorrect type for key %s", key)
+	}
+	return p, nil
+}
+
+func poolDataOfDict(poolDict map[string]interface{}) (PoolData, error) {
+	poolKey, err := getKeyAs[string](poolDict, "key", nil)
+	spacingFloat, err := getKeyAs[float64](poolDict, "tickSpacing", err)
+	feeFloat, err := getKeyAs[float64](poolDict, "tickSpacing", err)
+	currency0, err := getKeyAs[string](poolDict, "currency0", err)
+	currency1, err := getKeyAs[string](poolDict, "currency1", err)
+	hooks, err := getKeyAs[string](poolDict, "hooks", err)
+	if err != nil {
+		return PoolData{}, err
+	}
+	key := common.HexToHash(poolKey)
+	return PoolData{
+		key:         key,
+		tickSpacing: int(spacingFloat),
+		fee:         uint64(feeFloat),
+		currency0:   common.HexToAddress(currency0),
+		currency1:   common.HexToAddress(currency1),
+		hooks:       common.HexToAddress(hooks),
+	}, nil
+}
+
+func extractLastBlock(result map[string]interface{}) (uint64, error) {
+	lastBlockRaw, ok := result["lastBlock"]
+	if !ok {
+		return 0, fmt.Errorf("Missing key lastBlock in JSON")
+	}
+	lastBlockFloat, ok := lastBlockRaw.(float64)
+	if !ok {
+		return 0, fmt.Errorf("lastBlock was not a float in the json")
+	}
+	return uint64(lastBlockFloat), nil
+}
+
+func getPayload(context fmt.Stringer, result map[string]interface{}) (interface{}, error) {
+	doneRaw, exists := result["done"]
+	if !exists {
+		return nil, fmt.Errorf("No done status for %s", context)
+	}
+	doneBool, ok := doneRaw.(bool)
+	if !ok {
+		return nil, fmt.Errorf("done key was not a boolean")
+	}
+	if !doneBool {
+		// nothing to do yet
+		return nil, nil
+	}
+	payloadRaw, exists := result["payload"]
+	if !exists {
+		return nil, fmt.Errorf("No payload for done result for %s", context)
+	}
+	return payloadRaw, nil
 }
 
 /*
@@ -204,22 +292,28 @@ func (st *InvariantState) loadTokenPools(tokenAddress common.Address, bc etherap
 	if err != nil {
 		return nil, fmt.Errorf("Failed to fetch pools for token %s: %s", tokenAddress, err)
 	}
-	doneRaw, exists := result["done"]
-	if !exists {
-		return nil, fmt.Errorf("No done status for %s", tokenAddress)
+	poolPayloadRaw, err := getPayload(tokenAddress, result)
+	if err != nil {
+		return nil, err
 	}
-	if !doneRaw.(bool) {
-		// nothing to do yet
+	if poolPayloadRaw == nil {
 		return nil, nil
 	}
-	payloadRaw, exists := result["payload"]
-	if !exists {
-		return nil, fmt.Errorf("No payload for done result %s", tokenAddress)
-	}
 	tokenState := st.tokenAddressToInfo[tokenAddress]
-	for _, pRaw := range payloadRaw.([]interface{}) {
-		p := pRaw.(map[string]interface{})
-		key, data := poolDataOfDict(p)
+	poolList, ok := poolPayloadRaw.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("Invalid type for pool list result")
+	}
+	for _, pRaw := range poolList {
+		p, ok := pRaw.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("Pool data type")
+		}
+		data, err := poolDataOfDict(p)
+		if err != nil {
+			return nil, err
+		}
+		key := data.key
 		poolState, exists := st.poolIdToInfo[key]
 		poolLogger := tokenLogger.With("pool", key)
 		if !exists {
@@ -237,24 +331,52 @@ func (st *InvariantState) loadTokenPools(tokenAddress common.Address, bc etherap
 			poolState.monitor1 = true
 		}
 	}
-	lastBlockRaw, ok := result["lastBlock"]
-	if !ok {
-		return nil, fmt.Errorf("Missing key lastBlock in JSON")
+	lastPoolBlock, err := extractLastBlock(result)
+	if err != nil {
+		return nil, err
 	}
-	lastJsonBlock := uint64(lastBlockRaw.(float64))
+
+	err = etherapi.QueryJsonEndpoint(fmt.Sprintf("token-transfers?token=%s", strings.ToLower(tokenAddress.Hex())), &result)
+	if err != nil {
+		return nil, fmt.Errorf("Could not fetch token transfer info %s", err)
+	}
+	transferRaw, err := getPayload(tokenAddress, result)
+	if err != nil {
+		return nil, err
+	}
+	if transferRaw == nil {
+		return nil, nil
+	}
+	transferList, ok := transferRaw.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("Incorrect type for token transfer info")
+	}
+	for _, addressRaw := range transferList {
+		addressString, ok := addressRaw.(string)
+		if !ok {
+			return nil, fmt.Errorf("Incorrect type for address, expected string")
+		}
+		addr := common.HexToAddress(addressString)
+		tokenState.tokenBalances[addr] = true
+	}
+
+	lastTransferBlock, err := extractLastBlock(result)
+	if err != nil {
+		return nil, err
+	}
+	untilBlock := min(lastTransferBlock, lastPoolBlock)
+
 	extractor := &poolInitScan{
 		tokenAddress: tokenAddress,
 		st:           st,
 		newPools:     make(map[common.Hash]bool),
 		tokenState:   tokenState,
 	}
-	if lastJsonBlock != 0 {
-		err = bc.ScanBlocks(lastJsonBlock, true, func(l []*types.Log) error {
-			return processLogs(l, extractor, MODIFY|INITIALIZE)
-		})
-		if err != nil {
-			return nil, err
-		}
+	err = bc.ScanBlocks(untilBlock, true, func(l []*types.Log) error {
+		return processLogs(l, extractor, MODIFY|INITIALIZE|TRANSFER)
+	})
+	if err != nil {
+		return nil, err
 	}
 	ret := make([]common.Hash, 0, len(extractor.newPools))
 	for p, _ := range extractor.newPools {
@@ -329,8 +451,14 @@ func (st *InvariantState) getMonitoredPools(bc etherapi.BlockScanner, currBlock 
 	var allPools = make([]*PoolState, 0, len(st.poolIdToInfo))
 
 	for _, p := range tokenItems {
-		tokenDict := p.(map[string]interface{})
-		tokenAddress := tokenDict["address"].(string)
+		tokenDict, ok := p.(map[string]interface{})
+		if !ok {
+			return nil, nil, fmt.Errorf("Token items was not of correct type")
+		}
+		tokenAddress, err := getKeyAs[string](tokenDict, "address", nil)
+		if err != nil {
+			return nil, nil, err
+		}
 		tokenLogger := logger.With("token", tokenAddress)
 		tokenId := common.HexToAddress(tokenAddress)
 		tokenData, exists := st.tokenAddressToInfo[tokenId]
@@ -377,13 +505,22 @@ func (st *InvariantState) getMonitoredPools(bc etherapi.BlockScanner, currBlock 
 		return nil, nil, fmt.Errorf("Failed to get pool targets %s", err)
 	}
 	for _, p := range poolItems {
-		poolDict := p.(map[string]interface{})
-		poolKey := poolDict["key"].(string)
+		poolDict, ok := p.(map[string]interface{})
+		if !ok {
+			return nil, nil, fmt.Errorf("Pool targets was not of correct type")
+		}
+		poolKey, err := getKeyAs[string](poolDict, "key", nil)
+		if err != nil {
+			return nil, nil, err
+		}
 		key := common.HexToHash(poolKey)
 		poolState, exists := st.poolIdToInfo[key]
 		if !exists {
 			logger.Info("New request to monitor pool", "pool", poolKey)
-			_, data := poolDataOfDict(poolDict)
+			data, err := poolDataOfDict(poolDict)
+			if err != nil {
+				return nil, nil, err
+			}
 			poolState, _ = st.addPool(
 				key,
 				data,
@@ -477,48 +614,42 @@ func (st *InvariantState) loadInitialPositions(pool common.Hash, bc etherapi.Blo
 	root := map[string]interface{}{}
 
 	err := etherapi.QueryJsonEndpoint(fmt.Sprintf("pool-positions?key=%s", strings.ToLower(pool.Hex())), &root)
+	payload, err := getPayload(pool, root)
+	if err != nil {
+		return false, err
+	}
+	lastJsonBlock, err := extractLastBlock(root)
 	if err != nil {
 		return false, err
 	}
 
-	stat, exists := root["done"]
-	if !exists {
-		return false, fmt.Errorf("No done status in result for %s", pool)
-	}
-	if !stat.(bool) {
-		return false, nil
-	}
-
-	lastBlockRaw, ok := root["lastBlock"]
+	positionList, ok := payload.([]interface{})
 	if !ok {
-		return false, fmt.Errorf("Missing key lastBlock in JSON")
+		return false, fmt.Errorf("payload was not a list")
 	}
-	lastJsonBlock := uint64(lastBlockRaw.(float64))
-
-	decodedRaw, exists := root["payload"]
-	if !exists {
-		return false, fmt.Errorf("No payload for done result for %s", pool)
-	}
-	positionListRaw := decodedRaw
-
-	positionList := positionListRaw.([]interface{})
 	pi := st.poolIdToInfo[pool]
-	for i, p := range positionList {
-		m := p.(map[string]interface{})
-		positionBytes, ok := m["positionHash"]
+	for _, p := range positionList {
+		m, ok := p.(map[string]interface{})
 		if !ok {
-			return false, fmt.Errorf("Missing position hash from entry %d", i)
+			return false, fmt.Errorf("Position information was not a dictionary")
 		}
-		hash := common.HexToHash(positionBytes.(string))
+		positionBytes, err := getKeyAs[string](m, "positionHash", nil)
+		if err != nil {
+			return false, err
+		}
+
+		hash := common.HexToHash(positionBytes)
 		_, exists := pi.positionsToRange[hash]
 		if exists {
 			continue
 		}
-		lowerTick := int(m["tickLower"].(float64))
-		upperTick := int(m["tickUpper"].(float64))
+		lowerTickFloat, err := getKeyAs[float64](m, "tickLower", nil)
+		upperTickFloat, err := getKeyAs[float64](m, "tickUpper", err)
 		if err != nil {
-			return false, fmt.Errorf("Bad upper tick for hash %s: %s", hash, err)
+			return false, err
 		}
+		upperTick := int(upperTickFloat)
+		lowerTick := int(lowerTickFloat)
 		pi.positionsToRange[hash] = TickRangeNative{tickLower: lowerTick, tickUpper: upperTick}
 	}
 	scanner := &positionExtractor{
@@ -636,11 +767,11 @@ func (pcs *PoolComputationState) loadTickFees(db *state.StateDB, tick int) *Tick
 	if ret, exists = pcs.tickFeeCache[tick]; !exists {
 		// pcs.tickStateSlot is now point to the beginning of the relevant TickInfo
 		pcs.slotForTickState(tick)
-		pcs.tickStateSlot.AddUint64(pcs.tickStateSlot, 2) // pointing now to feegrowth0
+		pcs.tickStateSlot.AddUint64(pcs.tickStateSlot, storageOffsets.tickFeeGrowth0Offset) // pointing now to feegrowth0
 		feeGrowth0 := new(uint256.Int)
 		rawRead := db.GetState(poolManagerAddress, pcs.tickStateSlot.Bytes32())
 		feeGrowth0.SetBytes(rawRead[:])
-		pcs.tickStateSlot.AddUint64(pcs.tickStateSlot, 1) // pointing now to feegrowth1
+		pcs.tickStateSlot.AddUint64(pcs.tickStateSlot, storageOffsets.tickFeeGrowth1OffsetFrom0) // pointing now to feegrowth1
 		rawRead = db.GetState(poolManagerAddress, pcs.tickStateSlot.Bytes32())
 		feeGrowth1 := new(uint256.Int)
 		feeGrowth1.SetBytes(rawRead[:])
@@ -665,13 +796,13 @@ func (pcs *PoolComputationState) loadGlobalFees(db *state.StateDB) error {
 	}
 	pcs.slotComputation.Set(pcs.poolStateSlot)
 
-	pcs.slotComputation.AddUint64(pcs.slotComputation, 1) // points now at feegrowthglobal
+	pcs.slotComputation.AddUint64(pcs.slotComputation, storageOffsets.feeGrowthGlobal0Offset) // points now at feegrowthglobal
 	raw := db.GetState(poolManagerAddress, pcs.slotComputation.Bytes32())
 
 	pcs.feeGrowthGlobal0 = new(uint256.Int)
 	pcs.feeGrowthGlobal0.SetBytes(raw[:])
 
-	pcs.slotComputation.AddUint64(pcs.slotComputation, 1)
+	pcs.slotComputation.AddUint64(pcs.slotComputation, storageOffsets.feeGrowthGlobal1OffsetFrom0)
 
 	raw = db.GetState(poolManagerAddress, pcs.slotComputation.Bytes32())
 
@@ -759,7 +890,12 @@ func invariantChecks(
 		tickCache:     make(map[int]*uint256.Int),
 		signExtendBit: new(uint256.Int),
 	}
+	// map from pool ID to amount of currency0 owed for that pool
+	// if a key k appears in this map, there must be some token t s.t.
+	// t.poolTokens[k] == false
 	currency0Owed := make(map[common.Hash]*uint256.Int)
+	// map from pool ID to the amount of currency1 owed for that pool
+	// same invariant w.r.t. poolTokens, except t.poolTokens[k] == true
 	currency1Owed := make(map[common.Hash]*uint256.Int)
 
 	addToCurrency := func(owedMap map[common.Hash]*uint256.Int, pool common.Hash, amt *uint256.Int) {
@@ -774,7 +910,7 @@ func invariantChecks(
 	   Find those tokens which do not have a running sum yet.
 	   Force all involved pools to recompute
 	*/
-	for _, tokenState := range safeguardState.tokenAddressToInfo {
+	for t, tokenState := range safeguardState.tokenAddressToInfo {
 		if !tokenState.ready {
 			continue
 		}
@@ -790,9 +926,22 @@ func invariantChecks(
 					poolsNeedWork[p] = true
 				}
 			}
+
+			tokensNeedWork[t] = true
+		}
+		// this check is, technically speaking, redundant. But with all the mutability going on,
+		// I'd rather make these assumptions *very* explicit
+		if tokenState.protocolFees == nil || tokenState.transferBalances == nil {
+			if tokenState.owed != nil {
+				err = Fatal("Have nil protocol fees but we've computed the owed balance already?")
+				return
+			}
+			tokensNeedWork[t] = true
+		} else if tokenState.protocolFees != nil {
+
 		}
 	}
-
+	// start pool computation
 	for pool, doCheck := range poolsNeedWork {
 		poolLogger := logger.With("pool", pool)
 		if !doCheck {
@@ -818,7 +967,7 @@ func invariantChecks(
 			err = Fatal("Invariant broken")
 			return
 		}
-		psBytes := poolSlot.Bytes32()
+		psBytes := storageOffsets.poolSlot.Bytes32()
 		poolDataSlot := crypto.Keccak256Hash(pool[:], psBytes[:])
 		// get current tick
 		slot0value := statedb.GetState(poolManagerAddress, common.Hash(poolDataSlot))
@@ -853,14 +1002,15 @@ func invariantChecks(
 		totalPositionLiquidity := uint256.NewInt(0)
 		positionLiquidity := new(uint256.Int)
 
-		pcs.positionMappingSlot.AddUint64(pcs.poolStateSlot, 6)
-		pcs.tickMappingSlot.AddUint64(pcs.poolStateSlot, 4)
+		pcs.positionMappingSlot.AddUint64(pcs.poolStateSlot, storageOffsets.positionsOffset)
+		pcs.tickMappingSlot.AddUint64(pcs.poolStateSlot, storageOffsets.tickOffset)
 		positionMappingSlotRaw := pcs.positionMappingSlot.Bytes32()
 		poolLogger.Debug("Pool state", "position slot", common.Hash(positionMappingSlotRaw))
 
 		var activePositions uint64 = 0
 		poolLogger.Debug("Pool state", "num positions", len(poolState.positionsToRange))
 		foundNonZeroLiquidity := false
+		// start position sums
 		for pos, tickRange := range poolState.positionsToRange {
 			positionLogger := poolLogger.With("position", pos)
 			positionInfoSlot := crypto.Keccak256Hash(pos.Bytes(), positionMappingSlotRaw[:])
@@ -891,14 +1041,14 @@ func invariantChecks(
 			// feeGrowthInside*X fields
 			computeFees := func(inside0 bool) *uint256.Int {
 
-				feeGrowthInside0LastRaw := statedb.GetState(poolManagerAddress, pcs.slotComputation.Bytes32())
-				feeGrowthInsideLastUint := new(uint256.Int)
-				feeGrowthInsideLastUint.SetBytes(feeGrowthInside0LastRaw[:])
+				feeGrowthInsideKLastRaw := statedb.GetState(poolManagerAddress, pcs.slotComputation.Bytes32())
+				feeGrowthInsideLastKUint := new(uint256.Int)
+				feeGrowthInsideLastKUint.SetBytes(feeGrowthInsideKLastRaw[:])
 				if feeGrowthInside0X == nil {
 					feeGrowthInside0X, feeGrowthInside1X = pcs.feeGrowthInside(statedb, currTick, tickRange.tickLower, tickRange.tickUpper)
 				}
 				positionLogger.Debug("Fee computation parameters",
-					"feeGrowthInsideValue", feeGrowthInsideLastUint,
+					"feeGrowthInsideValue", feeGrowthInsideLastKUint,
 					"feeGrowthInside0X", feeGrowthInside0X,
 					"feeGrowthInside1X", feeGrowthInside1X,
 					"positionLiquidity", positionLiquidity,
@@ -912,22 +1062,22 @@ func invariantChecks(
 				} else {
 					feeGrowthToSubtractFrom = feeGrowthInside1X
 				}
-				feeGrowthInsideLastUint.Sub(feeGrowthToSubtractFrom, feeGrowthInsideLastUint)
-				pcs.bc.pc.mulDiv(feeGrowthInsideLastUint, positionLiquidity, pcs.bc.pc.namedConstant.Q128, feeGrowthInsideLastUint)
+				feeGrowthInsideLastKUint.Sub(feeGrowthToSubtractFrom, feeGrowthInsideLastKUint)
+				pcs.bc.pc.mulDiv(feeGrowthInsideLastKUint, positionLiquidity, pcs.bc.pc.namedConstant.Q128, feeGrowthInsideLastKUint)
 				if inside0 {
-					addToCurrency(currency0Owed, pool, feeGrowthInsideLastUint)
+					addToCurrency(currency0Owed, pool, feeGrowthInsideLastKUint)
 				} else {
-					addToCurrency(currency1Owed, pool, feeGrowthInsideLastUint)
+					addToCurrency(currency1Owed, pool, feeGrowthInsideLastKUint)
 				}
-				positionLogger.Debug("Fee result", "result", feeGrowthInsideLastUint)
-				return feeGrowthInsideLastUint
+				positionLogger.Debug("Fee result", "result", feeGrowthInsideLastKUint)
+				return feeGrowthInsideLastKUint
 			}
 			positionLogger.Debug("> start fee computation")
 			if poolState.monitor0 {
 				positionLogger.Debug(">> Start token balance computation", "token", poolState.currency0)
 				// hold onto your butts.gif
 				pcs.slotComputation.SetBytes(positionInfoSlot[:])
-				pcs.slotComputation.AddUint64(pcs.slotComputation, 1)
+				pcs.slotComputation.AddUint64(pcs.slotComputation, storageOffsets.feeGrowthInside0Offset)
 				scratchUint := computeFees(true)
 
 				// now let's compute how much is owed for this position
@@ -962,7 +1112,7 @@ func invariantChecks(
 			if poolState.monitor1 {
 				positionLogger.Debug(">> Start token balance computation", "token", poolState.currency1)
 				pcs.slotComputation.SetBytes(positionInfoSlot[:])
-				pcs.slotComputation.AddUint64(pcs.slotComputation, 2)
+				pcs.slotComputation.AddUint64(pcs.slotComputation, storageOffsets.feeGrowthInside1Offset)
 
 				scratchUint := computeFees(false)
 
@@ -997,9 +1147,11 @@ func invariantChecks(
 			}
 			positionLogger.Debug("< end fee computation")
 		}
+		// end position and owed sums
 		if !foundNonZeroLiquidity {
 			poolLogger.Warn("Found no non-zero liquidity in pool: sus")
 		}
+		// start liquidity invariant checks
 		evmTick := new(uint256.Int)
 		visited := make(map[int]bool)
 		var tickError *TickError
@@ -1050,7 +1202,7 @@ func invariantChecks(
 		}
 
 		// pool liquidity
-		pcs.poolStateSlot.AddUint64(pcs.poolStateSlot, 3)
+		pcs.poolStateSlot.AddUint64(pcs.poolStateSlot, storageOffsets.liquidityOffset)
 		rawLiq := statedb.GetState(poolManagerAddress, pcs.poolStateSlot.Bytes32())
 		poolLiquidity := positionLiquidity.SetBytes(rawLiq[:])
 
@@ -1083,6 +1235,10 @@ func invariantChecks(
 		if !tokenState.ready {
 			continue
 		}
+		if b, exists := tokensNeedWork[token]; !exists || !b {
+			// TODO: send "no change" message to server
+			continue
+		}
 		tokenLogger := logger.With("token", token)
 		isIncremental := tokenState.owed != nil
 		isIncomplete := false
@@ -1099,8 +1255,8 @@ func invariantChecks(
 				return req, nil
 			} else {
 				owed, exists := workResultMap[poolKey]
-				poolInfo := safeguardState.poolIdToInfo[poolKey]
 				if !exists {
+					poolInfo := safeguardState.poolIdToInfo[poolKey]
 					return nil, Fatal(fmt.Sprintf("Needed to do work on pool %s for token %s, but we didn't do it %s (%t) and %s (%t)?", poolKey, token, poolInfo.currency0, poolInfo.monitor0, poolInfo.currency1, poolInfo.monitor1))
 				}
 				return owed, nil

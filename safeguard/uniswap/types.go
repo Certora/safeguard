@@ -31,12 +31,6 @@ type PoolState struct {
 	monitor0, monitor1, monitorLiquidity bool
 
 	currency0ReqBalance, currency1ReqBalance *uint256.Int
-
-	// positionsByRange  map[TickRangeNative]map[common.Hash]bool
-	// positionsInterval *IntervalTreeNode
-
-	// positionsByUpper map[int]map[TickRangeNative]bool
-	// positionsByLower map[int]map[TickRangeNative]bool
 }
 
 type PoolData struct {
@@ -45,6 +39,7 @@ type PoolData struct {
 	tickSpacing int
 	fee         uint64
 	hooks       common.Address
+	key         common.Hash
 }
 
 type TokenState struct {
