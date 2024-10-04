@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/ethereum/go-ethereum/safeguard/etherapi"
 )
@@ -222,6 +223,11 @@ func (s *safeguardAdminServer) handleConnection(conn net.Conn) {
 	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(conn)
 
+	write := func(s string) {
+		conn.SetWriteDeadline(time.Now().Add(time.Duration(1) * time.Second))
+		writer.WriteString(s)
+	}
+
 	reject := func(err error) {
 		msg, err := json.Marshal(map[string]interface{}{
 			"success": false,
@@ -230,10 +236,15 @@ func (s *safeguardAdminServer) handleConnection(conn net.Conn) {
 		if err != nil {
 			fmt.Printf("Had an error writing an error %w: how ironic!\n", err)
 		}
-		writer.Write(msg)
+		write(string(msg))
+	}
+
+	accept := func() {
+		write(acceptedMessage)
 	}
 
 	for {
+		conn.SetReadDeadline(time.Now().Add(time.Duration(1) * time.Second))
 		messageBytes, err := reader.ReadBytes('\n')
 		if err == io.EOF {
 			return
@@ -262,15 +273,14 @@ func (s *safeguardAdminServer) handleConnection(conn net.Conn) {
 			logLevel := strings.TrimSpace(message.Data)
 			err = s.h.setLogCallback(logLevel)
 		default:
-			fmt.Println("unknown message type:", message.Type)
-			writer.WriteString(rejectedMessage)
+			reject(fmt.Errorf("Unknown message type: %s", message.Type))
 			return
 		}
 		if err != nil {
 			fmt.Printf("Error executing action %s: %w", message, err)
 			reject(err)
 		} else {
-			writer.WriteString(acceptedMessage)
+			accept()
 		}
 	}
 }
@@ -285,7 +295,7 @@ var stdHandler adminHandler = adminHandler{
 	setLogCallback: func(s string) error {
 		var p slog.Level
 		err := p.UnmarshalText([]byte(s))
-		if err == nil {
+		if err != nil {
 			return err
 		}
 		safeguardImpl.setLogLevel(p)
