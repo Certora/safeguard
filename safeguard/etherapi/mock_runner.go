@@ -7,14 +7,20 @@ import (
 	"github.com/holiman/uint256"
 )
 
+// Struct used to run *static* code on the EVM in an already deployed contract
 type MockRunner struct {
-	db    *state.StateDB
-	gas   uint64
+	// The state database, immutable
+	db *state.StateDB
+	// set to be the gas limit of the block
+	gas uint64
+	// the vm
 	vmenv *vm.EVM
 }
 
 var ZeroAddress common.Address
 
+// Loads the contract code at address, and sets the caller to the zero address.
+// Use the value returned by this function in RunCode
 func (mr *MockRunner) LoadRealContract(
 	address common.Address,
 ) *vm.Contract {
@@ -29,6 +35,8 @@ func (mr *MockRunner) LoadRealContract(
 	return toRet
 }
 
+// Invoke the contract (usually returned by LoadRealContract) with the given calldata buffer.
+// The return buffer is returned, along with the error (which may be non-nil if the call reverts.)
 func (mr *MockRunner) RunCode(
 	contract *vm.Contract,
 	calldata []byte,
@@ -37,6 +45,7 @@ func (mr *MockRunner) RunCode(
 	return interp.Run(contract, calldata, true)
 }
 
+// Create a new mock runner, do not call from plugins
 func NewMockRunner(db *state.StateDB, gas uint64, vmenv *vm.EVM) *MockRunner {
 	return &MockRunner{
 		db:    db,

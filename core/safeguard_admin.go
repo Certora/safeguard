@@ -263,7 +263,7 @@ func (s *safeguardAdminServer) handleConnection(conn net.Conn) {
 		case MessageTypeReload:
 			filePath := strings.TrimSpace(message.Data)
 			if s.featureFlags&AllowReloadFlag == 0 {
-				writer.WriteString(rejectedMessage)
+				reject(fmt.Errorf("Reloading disabled for plugins"))
 				continue
 			}
 			err = s.h.reloadCallback(filePath)

@@ -50,6 +50,7 @@ func NewStateProcessor(config *params.ChainConfig, chain *HeaderChain) *StatePro
 	}
 }
 
+// Implementation required by the BlockScan interface
 func (bc *BlockChain) ScanBlocks(lastJsonBlock uint64, ordered bool, cb func([]*types.Log) error) error {
 	currHead := bc.CurrentBlock()
 	currBlockNum := currHead.Number.Uint64()
@@ -66,6 +67,8 @@ func (bc *BlockChain) ScanBlocks(lastJsonBlock uint64, ordered bool, cb func([]*
 			}
 			return nil
 		}
+		// traverse backwards, either pushing onto the front of the output list (if ordered = true)
+		// or delivering immediately to cb
 		for blockNum > lastJsonBlock {
 			currNum := blockNum
 			ls := rawdb.ReadLogs(bc.db, headerIt.Hash(), currNum)
@@ -147,6 +150,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
 	p.chain.engine.Finalize(p.chain, header, statedb, block.Body())
+	// this is where safeguard runs
 	if bc != nil {
 		func() {
 			safeguardImpl.lock.Lock()

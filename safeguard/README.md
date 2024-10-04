@@ -39,10 +39,11 @@ to load the plugin.
 
 ## Loading and Using Plugins
 
-Each geth instance can run exactly one detector; multiplexed checking is not supported currently. There are three loading modes, which primarily control how the dynamic reloading/admin of the plugin works.
+Each geth instance can run exactly one detector; multiplexed checking is not supported currently. There are four loading/admin
+modes, which control how the dynamic reloading/admin of the plugin works.
 
-The mode used by the geth instance is determined by the SAFEGUARD_MODE environment variable, which can take one of four values: `STATIC`, `SOCKET`, `NET`, or `SIGNAL`. Any other value is ignored and no 
-plugin loading will be done. The behavior and configuration of these three modes is described below.
+The mode used by the geth instance is determined by the SAFEGUARD_MODE environment variable, which can take one of four values: `STATIC`, `SOCKET`, `NET`, or `SIGNAL`. 
+Any other value is ignored and no plugin loading will be done. The behavior and configuration of these four modes is described below.
 
 ### STATIC mode
 
@@ -82,7 +83,7 @@ the actions taken for each message is defined along with the schema.
 
 ### NET mode
 
-In this mode, plugin loading and administration is controlled via TPC connections on a specific port. At startup time, 
+In this mode, plugin loading and administration is controlled via TCP connections on a specific port. At startup time, 
 geth will read the `SAFEGUARD_ADMIN_PORT` environment variable and parses it as an integer, to be used
 as the port to listen on. If the parsing fails, the admin server is not started. If `SAFEGUARD_ADMIN_PORT` is not
 present, then the default port, 6969 is used.
@@ -96,7 +97,7 @@ below).
 ### Build script and dynamic reloading
 
 The `build_plugin.sh` script looks at the `SAFEGUARD_MODE` environment variable to try to automatically reload the plugin (assuming the build succeeded). If `SAFEGUARD_MODE` is unset or `STATIC`,
-it will not try to dynamically reload. Otherwise, it will try to use signals/sockets/tcp connectsion
+it will not try to dynamically reload. Otherwise, it will try to use signals/sockets/tcp connections
 to communicate that the plugin should be reloaded. For this process to work, `SAFEGUARD_MODE` and other
 variables (like `SAFEGUARD_SOCKET_PATH`) must be set to the same values used for launching geth. If you change the values 
 of these variables, reloading will not work, and in fact, if you change
@@ -117,7 +118,8 @@ new implementations can still be loaded according to the administration method s
 
 Go determines that a plugin is distinct from any existing plugins using two checks. Both of these must be satisfied for the plugin to be reloaded.
 
-1. The *real path* of the plugin must be different from any previously loaded plugin. This is why `SAFEGUARD_PLUGIN_PATH` can be a plugin: when doing this check, the symlink is first resolved.
+1. The *real path* of the plugin must be different from any previously loaded plugin. This is why `SAFEGUARD_PLUGIN_PATH` can be statically set but must be a symlink:
+   when doing this check, the symlink is first resolved.
    Thus, by updating the symlink to a new, unique path, this check can be satisfied.
 2. The plugin must have a unique "plugin path" from any previously loaded plugin. This "plugin path" is *not* the same thing as the file path. Rather, it is an internally generated
    identifier for the package/module holding the plugin name (analogous to the fully qualified package name of a class on the JVM). The plugin path is automatically inferred from the folder
@@ -139,7 +141,7 @@ If any validation steps fail (including because the plugin wasn't actually new) 
 Note that the same caveats as `SIGUSR1` apply here: this request is *not* idempotent, and sending two duplicate reload
 messages without changing the plugin object will cause a load failure and detecting to be paused.
 
-If the value `LOG`, then the dictionary must also include a key `data`. The associated value is expected to be a string
+If the value is the string `LOG`, then the dictionary must also include a key `data`. The associated value is expected to be a string
 indicating a log level, one of: `DEBUG`, `INFO`, `WARN`, or `ERROR`. If string is not one of these, the message
 is rejected. If the log level is valid, then the currently loaded plugin is requested to set its log output level
 to the indicated level. This choice does *not* persist across dynamic reloads. The plugin may, or may not, respect
@@ -154,3 +156,13 @@ to the client the string `{"success": true}`. If the message was rejected for an
 
 - `CERT_HTTP_API_URL` - HTTPS endpoint for the Python server (example: `https://676im49e3m.execute-api.us-west-2.amazonaws.com/prod/`). If not configured, defaults to `localhost:5000`
 - `CERT_CLIENT_ID` - string ID that should be included either in the `X-Correlation-ID` header or inside the message body while communicating with the server. 
+- `SAFEGUARD_MODE` - controls the administration mode used for safeguard, and loading strategy
+- `SAFEGUARD_LOAD_INITIAL` - If set, dynamic admin strategies will immediately load the plugin
+- `SAFEGUARD_PLUGIN_PATH` - Used to statically set the plugin path for loading. Used in `SIGNAL` and `STATIC` modes, and if `SAFEGUARD_LOAD_INITIAL` is set
+- `SAFEGUARD_ADMIN_PORT` - In net mode, used to set the port used for accepting admin messages
+- `SAFEGUARD_SOCKET_PATH` - In socket mode, used to set the path of the unix socket for accepting admin messages
+
+## Build Environment Variables
+
+- `GO_BIN` - if set, used to override the compiler used to build a plugin
+- `SAFEGUARD_OBJ_PATH` - if set, used to specify the full path for the output of the plugin compilation

@@ -9,8 +9,14 @@ import (
 	"strings"
 )
 
+// For rapid development a mapping of urls to their responses. Populated if
+// SAFEGUARD_PRANK_URLS is set
 var prankCache map[string]string
+
+// True if no calls to the server should be made, and the prank should be used instead
 var tryPrank bool = false
+
+// state flag, set to true after the first call to getOrPrank
 var prankLoaded bool = false
 
 func getOrPrank(url string) (io.Reader, error) {
@@ -40,7 +46,7 @@ func getOrPrank(url string) (io.Reader, error) {
 	}
 	contents, exists := prankCache[url]
 	if !exists {
-		return nil, fmt.Errorf("'Server' didn't have response for %s", url)
+		return nil, fmt.Errorf("Fake Server didn't have response for %s", url)
 	}
 	return strings.NewReader(contents), nil
 }
