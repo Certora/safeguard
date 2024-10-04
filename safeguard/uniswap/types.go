@@ -51,7 +51,11 @@ type TokenState struct {
 	poolTokens map[common.Hash]bool // true (aka "1") for currency1, false (aka "0") for currency0 (get it?)
 	ready      bool
 
-	owed *uint256.Int
+	tokenBalances map[common.Address]bool
+
+	protocolFees     *uint256.Int
+	transferBalances *uint256.Int
+	owed             *uint256.Int
 }
 
 type InvariantState struct {

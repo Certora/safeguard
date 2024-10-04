@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -77,7 +75,13 @@ func (h *detectorHandler) WithAttrs(s []slog.Attr) slog.Handler {
 		}
 		b.WriteString(r.Key)
 		b.WriteByte('=')
-		b.WriteString(r.Value.String())
+		if asHash, ok := r.Value.Any().(common.Hash); ok && r.Key == "pool" {
+			hashString := asHash.Hex()
+			hashFmt := hashString[0:10] + "..." + hashString[56:66]
+			b.WriteString(hashFmt)
+		} else {
+			b.WriteString(r.Value.String())
+		}
 	}
 	return &detectorHandler{
 		m:           h.m,
@@ -109,6 +113,7 @@ func (h *detectorHandler) Handle(c context.Context, r slog.Record) error {
 		if a.Equal(slog.Attr{}) {
 			return true
 		}
+		// we *know* we don't create this attribute, so just ignore it
 		if a.Value.Kind() == slog.KindGroup {
 			// nah
 			return false
@@ -237,7 +242,7 @@ func (st *InvariantState) loadTokenPools(tokenAddress common.Address, bc etherap
 		return nil, fmt.Errorf("Missing key lastBlock in JSON")
 	}
 	lastJsonBlock := uint64(lastBlockRaw.(float64))
-	extractor := &poolsForToken{
+	extractor := &poolInitScan{
 		tokenAddress: tokenAddress,
 		st:           st,
 		newPools:     make(map[common.Hash]bool),
@@ -556,6 +561,7 @@ var safeguardState InvariantState
 
 var poolManagerAddress = common.HexToAddress("0xE8E23e97Fa135823143d6b9Cba9c699040D51F70")
 
+var transferTopic = common.HexToHash("0x1b3d7edb2e9c0b0e7c525b20aaaef0f5940d2ed71663c7d39266ecafac728859")
 var swapTopic = common.HexToHash("0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f")
 var modifyLiquidityTopic = common.HexToHash("0xf208f4912782fd25c7f114ca3723a2d5dd6f3bcc3ac8db5af63baa85f711d5ec")
 var initializeTopic = common.HexToHash("0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438")
@@ -569,23 +575,6 @@ func (ps *PoolState) AddPosition(
 		tickUpper: tickUpper,
 	}
 	ps.positionsToRange[positionKey] = r
-	// indexing stuff, maybe we'll use later
-	// m, exists := ps.positionsByRange[r]
-	// rangeKeyExists := exists
-	// if exists {
-	// 	_, exists = m[positionKey]
-	// }
-	// if exists {
-	// 	return
-	// }
-	// add to indexes
-	// ps.positionsByLower[tickLower][r] = true
-	// ps.positionsByUpper[tickUpper][r] = true
-	// if !rangeKeyExists {
-	// 	ps.positionsByRange[r] = map[common.Hash]bool{}
-	// }
-	// ps.positionsByRange[r][positionKey] = true
-	// ps.positionsInterval.Insert(tickLower, tickUpper)
 }
 
 func (st *InvariantState) AddPosition(
@@ -618,15 +607,6 @@ func extractBigEndianUint24(b []byte, start int) uint64 {
 
 func abiToNativeTick(b []byte, start int) int {
 	return convert24BitToInt(extractBigEndianUint24(b, start))
-}
-
-const secretPhrase = "fear the old blood, by the gods fear it"
-
-// Helper function to create HMAC signature
-func createSignature(data string, secret string) string {
-	h := hmac.New(sha256.New, []byte(secret))
-	h.Write([]byte(data))
-	return hex.EncodeToString(h.Sum(nil))
 }
 
 const poolUpdateEndpoint = "pool-update"
@@ -751,26 +731,28 @@ func invariantChecks(
 		logger.Error("Monitoring task loading failed, clearing all statuses", "err", err)
 		return
 	}
-	needsWork := make(map[common.Hash]bool)
+	poolsNeedWork := make(map[common.Hash]bool)
+	tokensNeedWork := make(map[common.Address]bool)
 	for _, p := range poolsToMonitor {
-		needsWork[p] = false
+		poolsNeedWork[p] = false
 	}
 	/*
 	 force a check for all pools that were newly loaded, we know that all such pools must exist in needsWork, by the invariant on getMonitoredPools
 	*/
 	for _, p := range fresh {
-		needsWork[p] = true
+		poolsNeedWork[p] = true
 	}
 	/*
 	   All tokens and pools are synced up until the most recent block's logs
 	   ingest the most recent logs, adding positions and pools if necessary.
 	*/
 	err = processLogs(allLogs, &logMultiExtractor{
-		inv:        &safeguardState,
-		needsCheck: needsWork,
-	}, MODIFY|SWAP|INITIALIZE)
+		inv:             &safeguardState,
+		poolsNeedsCheck: poolsNeedWork,
+		tokensNeedCheck: tokensNeedWork,
+	}, MODIFY|SWAP|INITIALIZE|TRANSFER)
 	if err != nil {
-		return err
+		return
 	}
 	perCheckState := BlockComputationState{
 		pc:            getPC(),
@@ -803,15 +785,15 @@ func invariantChecks(
 					continue
 				}
 				if isCurrency0 && pState.currency0ReqBalance == nil {
-					needsWork[p] = true
+					poolsNeedWork[p] = true
 				} else if !isCurrency0 && pState.currency1ReqBalance == nil {
-					needsWork[p] = true
+					poolsNeedWork[p] = true
 				}
 			}
 		}
 	}
 
-	for pool, doCheck := range needsWork {
+	for pool, doCheck := range poolsNeedWork {
 		poolLogger := logger.With("pool", pool)
 		if !doCheck {
 			poolLogger.Debug("No work needed")
@@ -833,8 +815,8 @@ func invariantChecks(
 		poolLogger.Debug("Working on pool", "monitor0", poolState.monitor0, "monitor1", poolState.monitor1)
 		if !poolState.ready {
 			poolLogger.Error("Trying to do work on an incomplete pool, this is bad!")
-			safeguardState.Reset()
-			return Fatal("Invariant broken")
+			err = Fatal("Invariant broken")
+			return
 		}
 		psBytes := poolSlot.Bytes32()
 		poolDataSlot := crypto.Keccak256Hash(pool[:], psBytes[:])
@@ -878,7 +860,7 @@ func invariantChecks(
 
 		var activePositions uint64 = 0
 		poolLogger.Debug("Pool state", "num positions", len(poolState.positionsToRange))
-		logged := false
+		foundNonZeroLiquidity := false
 		for pos, tickRange := range poolState.positionsToRange {
 			positionLogger := poolLogger.With("position", pos)
 			positionInfoSlot := crypto.Keccak256Hash(pos.Bytes(), positionMappingSlotRaw[:])
@@ -886,9 +868,8 @@ func invariantChecks(
 			raw := statedb.GetState(poolManagerAddress, positionInfoSlot)
 			positionLiquidity.SetBytes(raw.Bytes())
 			positionLogger.Debug("Position state", "liquidity", positionLiquidity)
-			if positionLiquidity.GtUint64(0) && !logged {
-				logged = true
-				poolLogger.Debug("Have non-zero liquidity in pool")
+			if !foundNonZeroLiquidity && positionLiquidity.GtUint64(0) {
+				foundNonZeroLiquidity = true
 			}
 			if tickRange.tickLower <= currTick && currTick < tickRange.tickUpper {
 				activePositions++
@@ -1016,7 +997,7 @@ func invariantChecks(
 			}
 			positionLogger.Debug("< end fee computation")
 		}
-		if !logged {
+		if !foundNonZeroLiquidity {
 			poolLogger.Warn("Found no non-zero liquidity in pool: sus")
 		}
 		evmTick := new(uint256.Int)
@@ -1109,7 +1090,7 @@ func invariantChecks(
 			tokenState.owed = new(uint256.Int)
 		}
 		getLatestCurrencyGen := func(poolKey common.Hash, workResultMap map[common.Hash]*uint256.Int, fieldGetter func(*PoolState) *uint256.Int) (*uint256.Int, error) {
-			if !needsWork[poolKey] {
+			if !poolsNeedWork[poolKey] {
 				p := safeguardState.poolIdToInfo[poolKey]
 				req := fieldGetter(p)
 				if req == nil {
@@ -1190,11 +1171,14 @@ func invariantChecks(
 				continue
 			}
 			// no need to update the incremental amount
-			if !needsWork[poolKey] {
+			if !poolsNeedWork[poolKey] {
 				continue
 			}
 			// otherwise compute the diff
-			applyRequiredAmountDelta(isCurrency1, pState)
+			err = applyRequiredAmountDelta(isCurrency1, pState)
+			if err != nil {
+				return
+			}
 		}
 		// the token amount should now be equal to the sum of balances reqd by positions
 		// check that the holds for the pool is correct

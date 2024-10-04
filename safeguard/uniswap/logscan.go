@@ -6,35 +6,38 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/holiman/uint256"
 )
 
 const SWAP = 1
 const MODIFY = 2
 const INITIALIZE = 4
+const TRANSFER = 8
 
 type LogCallback interface {
 	poolFilter(pool common.Hash) bool
 	onSwap(pool common.Hash)
 	onPosition(tickLower, tickUpper int, positionKey, pool common.Hash)
 	onInitialize(poolKey common.Hash, tickSpacing int, fee uint64, currency0, currency1, hooks common.Address)
+	onTransfer(token, from, to common.Address, amount *uint256.Int)
 }
 
-type poolsForToken struct {
+type poolInitScan struct {
 	st           *InvariantState
 	tokenAddress common.Address
 	newPools     map[common.Hash]bool
 	tokenState   *TokenState
 }
 
-func (p *poolsForToken) InvariantState() *InvariantState {
+func (p *poolInitScan) InvariantState() *InvariantState {
 	return p.st
 }
 
-func (p *poolsForToken) NotifyNewPool(poolKey common.Hash) {
+func (p *poolInitScan) NotifyNewPool(poolKey common.Hash) {
 	p.newPools[poolKey] = true
 }
 
-func (p *poolsForToken) TrackingToken(tok common.Address) *TokenState {
+func (p *poolInitScan) TrackingToken(tok common.Address) *TokenState {
 	if tok == p.tokenAddress {
 		return p.tokenState
 	} else {
@@ -42,21 +45,28 @@ func (p *poolsForToken) TrackingToken(tok common.Address) *TokenState {
 	}
 }
 
-func (p *poolsForToken) onInitialize(poolKey common.Hash, tickSpacing int, fee uint64, currency0, currency1, hooks common.Address) {
+func (p *poolInitScan) onInitialize(poolKey common.Hash, tickSpacing int, fee uint64, currency0, currency1, hooks common.Address) {
 	onInitCallback(p, poolKey, tickSpacing, fee, currency0, currency1, hooks)
 }
 
-func (p *poolsForToken) poolFilter(pool common.Hash) bool {
+func (p *poolInitScan) poolFilter(pool common.Hash) bool {
 	_, ok := p.newPools[pool]
 	return ok
 }
 
-func (p *poolsForToken) onSwap(pool common.Hash) {
+func (p *poolInitScan) onSwap(pool common.Hash) {
 	panic("do not call me")
 }
 
-func (p *poolsForToken) onPosition(tickLower, tickUpper int, positionKey, pool common.Hash) {
+func (p *poolInitScan) onPosition(tickLower, tickUpper int, positionKey, pool common.Hash) {
 	p.st.AddPosition(pool, positionKey, tickLower, tickUpper)
+}
+
+func (p *poolInitScan) onTransfer(token, to, from common.Address, amount *uint256.Int) {
+	if p.tokenAddress != token {
+		return
+	}
+	p.tokenState.tokenBalances[to] = true
 }
 
 type positionExtractor struct {
@@ -76,7 +86,7 @@ func onInitCallback(inv WithInvariantState, poolKey common.Hash, tickSpacing int
 	p := inv.InvariantState()
 	t := inv.TrackingToken(currency0)
 	if t != nil {
-		fmt.Printf("Found new pool %s for token %s\n", currency0)
+		logger.Info("Found new pool for token", "token", currency0, "pool", poolKey)
 		d, isNew := p.addPool(poolKey, PoolData{
 			currency0:   currency0,
 			currency1:   currency1,
@@ -94,7 +104,7 @@ func onInitCallback(inv WithInvariantState, poolKey common.Hash, tickSpacing int
 	}
 	t = inv.TrackingToken(currency1)
 	if t != nil {
-		fmt.Printf("Found new pool %s for token %s\n", currency1)
+		logger.Info("Found new pool for token", "token", currency1, "pool", poolKey)
 		d, isNew := p.addPool(poolKey, PoolData{
 			currency0:   currency0,
 			currency1:   currency1,
@@ -166,6 +176,16 @@ func processLogs(
 			tickSpacing := convert24BitToInt(extractBigEndianUint24(l.Data, 32+29))
 			hooks := common.BytesToAddress(l.Data[64 : 64+32])
 			lb.onInitialize(poolId, tickSpacing, fee, currency0, currency1, hooks)
+		} else if l.Topics[0] == swapTopic && filt&TRANSFER != 0 {
+			if len(l.Topics) != 4 {
+				return fmt.Errorf("Wrong number of topics for transfer event")
+			}
+			tokenAddress := common.BytesToAddress(l.Topics[3][:])
+			toAddress := common.BytesToAddress(l.Topics[2][:])
+			fromAddress := common.BytesToAddress(l.Topics[1][:])
+			amount := new(uint256.Int)
+			amount.SetBytes(l.Data)
+			lb.onTransfer(tokenAddress, fromAddress, toAddress, amount)
 		} else {
 			continue
 		}
@@ -174,8 +194,9 @@ func processLogs(
 }
 
 type logMultiExtractor struct {
-	inv        *InvariantState
-	needsCheck map[common.Hash]bool
+	inv             *InvariantState
+	poolsNeedsCheck map[common.Hash]bool
+	tokensNeedCheck map[common.Address]bool
 }
 
 func (lme *logMultiExtractor) InvariantState() *InvariantState {
@@ -183,7 +204,7 @@ func (lme *logMultiExtractor) InvariantState() *InvariantState {
 }
 
 func (lme *logMultiExtractor) NotifyNewPool(pool common.Hash) {
-	lme.needsCheck[pool] = true
+	lme.poolsNeedsCheck[pool] = true
 }
 
 func (lme *logMultiExtractor) TrackingToken(token common.Address) *TokenState {
@@ -195,18 +216,27 @@ func (lme *logMultiExtractor) TrackingToken(token common.Address) *TokenState {
 	}
 }
 
+func (lme *logMultiExtractor) onTransfer(token, from, to common.Address, amt *uint256.Int) {
+	t, exists := lme.inv.tokenAddressToInfo[token]
+	if !exists {
+		return
+	}
+	t.tokenBalances[to] = true
+	lme.tokensNeedCheck[token] = true
+}
+
 func (lme *logMultiExtractor) poolFilter(pool common.Hash) bool {
-	_, exists := lme.needsCheck[pool]
+	_, exists := lme.poolsNeedsCheck[pool]
 	return exists
 }
 
 func (pe *logMultiExtractor) onSwap(pool common.Hash) {
-	pe.needsCheck[pool] = true
+	pe.poolsNeedsCheck[pool] = true
 }
 
 func (pe *logMultiExtractor) onPosition(tickLower, tickUpper int, positionKey, pool common.Hash) {
 	pe.inv.AddPosition(pool, positionKey, tickLower, tickUpper)
-	pe.needsCheck[pool] = true
+	pe.poolsNeedsCheck[pool] = true
 }
 
 func (pe *logMultiExtractor) onInitialize(poolKey common.Hash, tickSpacing int, fee uint64, currency0, currency1, hooks common.Address) {
