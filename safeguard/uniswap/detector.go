@@ -1,14 +1,17 @@
 package main
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/big"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -18,6 +21,120 @@ import (
 	"github.com/ethereum/go-ethereum/safeguard/etherapi"
 	"github.com/holiman/uint256"
 )
+
+type detectorHandler struct {
+	m           *sync.Mutex
+	levelVar    *slog.LevelVar
+	attr        string
+	groupPrefix string
+	writer      io.Writer
+}
+
+func getHandler(lv *slog.LevelVar) *detectorHandler {
+	return &detectorHandler{
+		m:           &sync.Mutex{},
+		levelVar:    lv,
+		attr:        "",
+		groupPrefix: "",
+		writer:      os.Stdout,
+	}
+}
+
+func (h *detectorHandler) Enabled(c context.Context, l slog.Level) bool {
+	s := h.levelVar.Level()
+	return l >= s
+}
+
+func (h *detectorHandler) WithGroup(s string) slog.Handler {
+	if s == "" {
+		return h
+	}
+	newGroup := h.groupPrefix
+	if len(h.groupPrefix) != 0 {
+		newGroup += "."
+	}
+	newGroup += s
+	return &detectorHandler{
+		m:           h.m,
+		levelVar:    h.levelVar,
+		attr:        h.attr,
+		groupPrefix: newGroup,
+		writer:      h.writer,
+	}
+}
+
+func (h *detectorHandler) WithAttrs(s []slog.Attr) slog.Handler {
+	var b strings.Builder
+	b.WriteString(h.attr)
+	if b.Len() != 0 {
+		b.WriteByte(' ')
+	}
+	needDot := len(h.groupPrefix) > 0
+	for _, r := range s {
+		if needDot {
+			b.WriteString(h.groupPrefix)
+			b.WriteByte('.')
+		}
+		b.WriteString(r.Key)
+		b.WriteByte('=')
+		b.WriteString(r.Value.String())
+	}
+	return &detectorHandler{
+		m:           h.m,
+		attr:        b.String(),
+		levelVar:    h.levelVar,
+		groupPrefix: h.groupPrefix,
+		writer:      h.writer,
+	}
+}
+
+// no, this is not a bug, this is what a formatting string looks like in Go
+const formatString = "[01-02|15:04:05.000]"
+
+func (h *detectorHandler) Handle(c context.Context, r slog.Record) error {
+	var b strings.Builder
+	level := r.Level.String()
+	// no errors
+	b.WriteString(level)
+	b.WriteByte(' ')
+	var t time.Time
+	// is there a better way to check for the zero time? I don't know!
+	if r.Time != t {
+		b.WriteString(r.Time.Format(formatString))
+		b.WriteByte(' ')
+	}
+	b.WriteString(r.Message)
+	hasGroup := len(h.groupPrefix) != 0
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Equal(slog.Attr{}) {
+			return true
+		}
+		if a.Value.Kind() == slog.KindGroup {
+			// nah
+			return false
+		}
+		b.WriteByte(' ')
+		if hasGroup {
+			b.WriteString(h.groupPrefix)
+			b.WriteByte('.')
+		}
+		b.WriteString(a.Key)
+		b.WriteByte('=')
+		b.WriteString(a.Value.String())
+		return true
+	})
+	if len(h.attr) != 0 {
+		b.WriteByte(' ')
+		b.WriteByte('(')
+		b.WriteString(h.attr)
+		b.WriteByte(')')
+	}
+	b.WriteByte('\n')
+	h.m.Lock()
+	defer h.m.Unlock()
+	h.writer.Write([]byte(b.String()))
+	return nil
+}
 
 func appendUint256Arg(
 	buffer []byte,
@@ -48,9 +165,7 @@ func (bc *BlockComputationState) getSqrtRatioAtTick(tick int) *uint256.Int {
 
 var levelVar slog.LevelVar
 
-var logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-	Level: &levelVar,
-}))
+var logger = slog.New(getHandler(&levelVar))
 
 var poolSlot = uint256.NewInt(6)
 
@@ -427,6 +542,14 @@ func init() {
 	safeguardState.poolIdToInfo = make(map[common.Hash]*PoolState)
 	safeguardState.tokenAddressToInfo = make(map[common.Address]*TokenState)
 	initPC()
+	go func() {
+		for {
+			time.Sleep(time.Duration(5) * time.Second)
+			logger.Debug("Hello")
+			logger.Info("Hello World")
+			logger.Error("Blerp")
+		}
+	}()
 }
 
 var safeguardState InvariantState

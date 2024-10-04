@@ -40,6 +40,15 @@ throttle_limit += throttle_limit / 2
 
 def parse_logs(args, topic, cb, **extra_topics):
     max_block = 0
+    time_query_url = "https://api-sepolia.etherscan.io/api?module=block&action=getblocknobytime&closest=before&apikey=%s&timestamp=%d" % (args.apikey, int(time.time()))
+    with urllib.request.urlopen(time_query_url) as response:
+        if response.status != 200:
+            max_block = 0
+        else:
+            block_res = json.loads(response.read().decode("utf-8"))
+            if "result" in block_res and type(block_res["result"]) is str:
+                max_block = int(block_res["result"])
+    time.sleep(throttle_limit)
     page_counter = 1
     block_start = None
     while True:
@@ -67,8 +76,6 @@ def parse_logs(args, topic, cb, **extra_topics):
             raise RuntimeError(f"failed querying {query_url}, result was: {contents}")
         for i in obj["result"]:
             cb(i)
-            # position_hash = extract_position_hash(p)
-            # positions.add((p[0], p[1], p[2], position_hash))
         max_block = max(max_block, int(obj["result"][-1]["blockNumber"], 16))
         if len(obj["result"]) != 1000:
             break
@@ -90,7 +97,6 @@ def extract_int24(hex_string):
 def scan_positions(args):
     position_to_ticks = dict()
     def parse_position(log_item):
-        print(log_item["data"])
         sender = log_item["topics"][2]
         tick_lower_raw = log_item["data"][2:66]
         tick_lower = extract_int24(tick_lower_raw[-6:])
@@ -147,8 +153,9 @@ def main():
 
     args = parser.parse_args()
 
-    global cps
-    cps = args.requests_per_second
+    global throttle_limit
+    throttle_limit = 1.0 / args.requests_per_second
+    throttle_limit += throttle_limit / 2.0
 
     if args.mode == "pools":
         scan_pools(args)
