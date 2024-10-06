@@ -200,7 +200,6 @@ func processLogs(
 type logMultiExtractor struct {
 	inv             *InvariantState
 	poolsNeedsCheck map[common.Hash]bool
-	tokensNeedCheck map[common.Address]bool
 }
 
 func (lme *logMultiExtractor) InvariantState() *InvariantState {
@@ -226,7 +225,6 @@ func (lme *logMultiExtractor) onTransfer(token, from, to common.Address, amt *ui
 		return
 	}
 	t.tokenBalances[to] = true
-	lme.tokensNeedCheck[token] = true
 }
 
 func (lme *logMultiExtractor) poolFilter(pool common.Hash) bool {

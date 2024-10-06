@@ -1,6 +1,8 @@
 package main
 
 import (
+	"log/slog"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/holiman/uint256"
 )
@@ -48,9 +50,9 @@ type TokenState struct {
 
 	tokenBalances map[common.Address]bool
 
-	protocolFees     *uint256.Int
-	transferBalances *uint256.Int
-	owed             *uint256.Int
+	// protocolFees     *uint256.Int
+	// transferBalances *uint256.Int
+	//owed             *uint256.Int
 }
 
 type InvariantState struct {
@@ -63,6 +65,8 @@ type BlockComputationState struct {
 	tickCache map[int]*uint256.Int
 
 	signExtendBit *uint256.Int
+
+	currency0Owed, currency1Owed map[common.Hash]*uint256.Int
 }
 
 type TickError struct {
@@ -76,7 +80,18 @@ type TickFeeGrowth struct {
 }
 
 type PoolComputationState struct {
-	bc           BlockComputationState
+	bc BlockComputationState
+
+	key common.Hash
+
+	liquidityGross, liquidityNet map[int]*uint256.Int
+
+	positionLiquidity, totalPositionLiquidity *uint256.Int
+
+	activePositions uint64
+
+	currTick int
+
 	tickFeeCache map[int]*TickFeeGrowth
 
 	/*
@@ -111,4 +126,12 @@ type PoolComputationState struct {
 	   cached fields (initially nil) which hold the fee growth global fields of the pool state
 	*/
 	feeGrowthGlobal0, feeGrowthGlobal1 *uint256.Int
+}
+
+type PositionComputationState struct {
+	feeGrowthInside0X, feeGrowthInside1X *uint256.Int
+	pcs                                  *PoolComputationState
+	positionInfoSlot                     common.Hash
+	tickRange                            TickRangeNative
+	logger                               *slog.Logger
 }

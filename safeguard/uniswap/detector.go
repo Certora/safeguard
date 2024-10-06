@@ -174,7 +174,7 @@ var logger = slog.New(getHandler(&levelVar))
 
 type storageOffsetsT struct {
 	// base slots
-	protocolFeesAccruedSlot, balanceOfSlot, poolSlot *uint256.Int
+	protocolFeesAccruedSlot, balanceOfSlot, poolSlot [32]byte
 
 	// offsets within pool state
 	positionsOffset, tickOffset, feeGrowthGlobal0Offset, feeGrowthGlobal1OffsetFrom0, liquidityOffset uint64
@@ -187,9 +187,11 @@ type storageOffsetsT struct {
 }
 
 var storageOffsets = storageOffsetsT{
-	poolSlot:                uint256.NewInt(6),
-	protocolFeesAccruedSlot: uint256.NewInt(1),
-	balanceOfSlot:           uint256.NewInt(4),
+	// all we do is hash these, so it's more convenient in this form
+	// we could technically compute this ourselves without going through uint256, but nah
+	poolSlot:                uint256.NewInt(6).Bytes32(),
+	protocolFeesAccruedSlot: uint256.NewInt(1).Bytes32(),
+	balanceOfSlot:           uint256.NewInt(4).Bytes32(),
 
 	positionsOffset:             6,
 	tickOffset:                  4,
@@ -839,6 +841,245 @@ func (pcs *PoolComputationState) feeGrowthInside(
 	return feeGrowthInside0X128, feeGrowthInside1X128
 }
 
+func addToCurrencyGen(owedMap map[common.Hash]*uint256.Int, pool common.Hash, amt *uint256.Int) {
+	curr, exists := owedMap[pool]
+	if !exists {
+		curr = new(uint256.Int)
+		owedMap[pool] = curr
+	}
+	curr.Add(curr, amt)
+}
+
+func (bc *BlockComputationState) addToCurrency0(pool common.Hash, amt *uint256.Int) {
+	addToCurrencyGen(bc.currency0Owed, pool, amt)
+}
+
+func (bc *BlockComputationState) addToCurrency1(pool common.Hash, amt *uint256.Int) {
+	addToCurrencyGen(bc.currency1Owed, pool, amt)
+}
+
+func getTickSumIn(m map[int]*uint256.Int, tick int) *uint256.Int {
+	var toRet *uint256.Int
+	var exists bool
+	if toRet, exists = m[tick]; !exists {
+		toRet = new(uint256.Int)
+		m[tick] = toRet
+	}
+	return toRet
+}
+
+func (pcs *PoolComputationState) getGrossTickSum(tick int) *uint256.Int {
+	return getTickSumIn(pcs.liquidityGross, tick)
+}
+
+func (pcs *PoolComputationState) getNetTickSum(tick int) *uint256.Int {
+	return getTickSumIn(pcs.liquidityNet, tick)
+}
+
+func (pos *PositionComputationState) getFeeGrowthInside(statedb *state.StateDB) (*uint256.Int, *uint256.Int) {
+	if pos.feeGrowthInside0X == nil {
+		feeGrowthInside0X, feeGrowthInside1X := pos.pcs.feeGrowthInside(statedb, pos.pcs.currTick, pos.tickRange.tickLower, pos.tickRange.tickUpper)
+		pos.feeGrowthInside0X = feeGrowthInside0X
+		pos.feeGrowthInside1X = feeGrowthInside1X
+	}
+	return pos.feeGrowthInside0X, pos.feeGrowthInside1X
+}
+
+func (pos *PositionComputationState) computeFees(statedb *state.StateDB, inside0 bool) *uint256.Int {
+	pos.pcs.slotComputation.SetBytes(pos.positionInfoSlot[:])
+	var offsetAmount uint64
+	if inside0 {
+		offsetAmount = storageOffsets.feeGrowthInside0Offset
+	} else {
+		offsetAmount = storageOffsets.feeGrowthInside1Offset
+	}
+	pos.pcs.slotComputation.AddUint64(pos.pcs.slotComputation, offsetAmount)
+	feeGrowthInsideKLastRaw := statedb.GetState(poolManagerAddress, pos.pcs.slotComputation.Bytes32())
+	feeGrowthInsideLastKUint := new(uint256.Int)
+	feeGrowthInsideLastKUint.SetBytes(feeGrowthInsideKLastRaw[:])
+	feeGrowthInside0X, feeGrowthInside1X := pos.getFeeGrowthInside(statedb)
+
+	pos.logger.Debug("Fee computation parameters",
+		"feeGrowthInsideValue", feeGrowthInsideLastKUint,
+		"feeGrowthInside0X", feeGrowthInside0X,
+		"feeGrowthInside1X", feeGrowthInside1X,
+		"positionLiquidity", pos.pcs.positionLiquidity,
+		"tickLower", pos.tickRange.tickLower,
+		"tickUpper", pos.tickRange.tickUpper,
+		"is currency0?", inside0,
+	)
+	var feeGrowthToSubtractFrom *uint256.Int
+	if inside0 {
+		feeGrowthToSubtractFrom = feeGrowthInside0X
+	} else {
+		feeGrowthToSubtractFrom = feeGrowthInside1X
+	}
+	feeGrowthInsideLastKUint.Sub(feeGrowthToSubtractFrom, feeGrowthInsideLastKUint)
+	pos.pcs.bc.pc.mulDiv(feeGrowthInsideLastKUint, pos.pcs.positionLiquidity, pos.pcs.bc.pc.namedConstant.Q128, feeGrowthInsideLastKUint)
+	if inside0 {
+		pos.pcs.bc.addToCurrency0(pos.pcs.key, feeGrowthInsideLastKUint)
+	} else {
+		pos.pcs.bc.addToCurrency1(pos.pcs.key, feeGrowthInsideLastKUint)
+	}
+	pos.logger.Debug("Fee result", "result", feeGrowthInsideLastKUint)
+	return feeGrowthInsideLastKUint
+}
+
+func (pos *PositionComputationState) processPosition(
+	poolState *PoolState,
+	statedb *state.StateDB,
+) error {
+	positionLogger := pos.logger
+	pcs := pos.pcs
+	positionLogger.Debug("Position state", "liquidity slot", pos.positionInfoSlot)
+	raw := statedb.GetState(poolManagerAddress, pos.positionInfoSlot)
+	pcs.positionLiquidity.SetBytes(raw.Bytes())
+	positionLogger.Debug("Position state", "liquidity", pcs.positionLiquidity)
+	tickRange := pos.tickRange
+	currTick := pos.pcs.currTick
+	if tickRange.tickLower <= currTick && currTick < tickRange.tickUpper {
+		pcs.activePositions++
+		pcs.totalPositionLiquidity = pcs.totalPositionLiquidity.Add(pcs.totalPositionLiquidity, pcs.positionLiquidity)
+	}
+	grossLower := pcs.getGrossTickSum(tickRange.tickLower)
+	grossLower.Add(grossLower, pcs.positionLiquidity)
+	grossUpper := pcs.getGrossTickSum(tickRange.tickUpper)
+	grossUpper.Add(grossUpper, pcs.positionLiquidity)
+
+	netLower := pcs.getNetTickSum(tickRange.tickLower)
+	netLower.Add(netLower, pcs.positionLiquidity)
+	netUpper := pcs.getNetTickSum(tickRange.tickUpper)
+	netUpper.Sub(netUpper, pcs.positionLiquidity)
+
+	positionLogger.Debug("> start fee computation")
+	if poolState.monitor0 {
+		positionLogger.Debug(">> Start token balance computation", "token", poolState.currency0)
+		scratchUint := pos.computeFees(statedb, true)
+
+		// now let's compute how much is owed for this position
+		tickLowerPrice := pcs.bc.getSqrtRatioAtTick(tickRange.tickLower)
+		tickUpperPrice := pcs.bc.getSqrtRatioAtTick(tickRange.tickUpper)
+
+		positionLogger.Debug(">> Price parameters",
+			"token", poolState.currency0,
+			"tickLowerPrice", tickLowerPrice,
+			"tickUpperPrice", tickUpperPrice,
+			"sqrtPriceX96", pcs.sqrtPriceX96,
+			"liquidity", pcs.positionLiquidity,
+			"tickLower", tickRange.tickLower,
+			"tickUpper", tickRange.tickUpper,
+		)
+
+		pc := pcs.bc.pc
+		if tickLowerPrice.Gt(pcs.sqrtPriceX96) {
+			pc.sqrtRatioAX96.Set(tickLowerPrice)
+		} else {
+			pc.sqrtRatioAX96.Set(pcs.sqrtPriceX96)
+		}
+		if tickUpperPrice.Gt(pcs.sqrtPriceX96) {
+			pc.sqrtRatioBX96.Set(tickUpperPrice)
+		} else {
+			pc.sqrtRatioBX96.Set(pcs.sqrtPriceX96)
+		}
+		pc.getAmount0DeltaRoundDown(pcs.positionLiquidity, scratchUint)
+		positionLogger.Debug("<< Balance computation finished", "result", scratchUint)
+		pcs.bc.addToCurrency0(poolState.key, scratchUint)
+	}
+	if poolState.monitor1 {
+		positionLogger.Debug(">> Start token balance computation", "token", poolState.currency1)
+		pcs.slotComputation.SetBytes(pos.positionInfoSlot[:])
+		pcs.slotComputation.AddUint64(pcs.slotComputation, storageOffsets.feeGrowthInside1Offset)
+
+		scratchUint := pos.computeFees(statedb, false)
+
+		tickLowerPrice := pcs.bc.getSqrtRatioAtTick(tickRange.tickLower)
+		tickUpperPrice := pcs.bc.getSqrtRatioAtTick(tickRange.tickUpper)
+
+		positionLogger.Debug(">> Price parameters",
+			"token", poolState.currency0,
+			"tickLowerPrice", tickLowerPrice,
+			"tickUpperPrice", tickUpperPrice,
+			"sqrtPriceX96", pcs.sqrtPriceX96,
+			"liquidity", pcs.positionLiquidity,
+			"tickLower", tickRange.tickLower,
+			"tickUpper", tickRange.tickUpper,
+		)
+
+		pc := pcs.bc.pc
+		if tickLowerPrice.Lt(pcs.sqrtPriceX96) {
+			pc.sqrtRatioAX96.Set(tickLowerPrice)
+		} else {
+			pc.sqrtRatioAX96.Set(pcs.sqrtPriceX96)
+		}
+		if tickUpperPrice.Lt(pcs.sqrtPriceX96) {
+			pc.sqrtRatioBX96.Set(tickUpperPrice)
+		} else {
+			pc.sqrtRatioBX96.Set(pcs.sqrtPriceX96)
+		}
+		pc.getAmount1DeltaRoundDown(pcs.positionLiquidity, scratchUint)
+		pcs.bc.addToCurrency1(poolState.key, scratchUint)
+		positionLogger.Debug("<< Balance computation finished", "result", scratchUint)
+		// phew
+	}
+	positionLogger.Debug("< end fee computation")
+	return nil
+}
+
+func (pcs *PoolComputationState) processPool(
+	statedb *state.StateDB,
+) error {
+	pool := pcs.key
+	poolLogger := logger.With("pool", pool)
+	poolState := safeguardState.poolIdToInfo[pool]
+	poolLogger.Debug("Working on pool", "monitor0", poolState.monitor0, "monitor1", poolState.monitor1)
+	if !poolState.ready {
+		poolLogger.Error("Trying to do work on an incomplete pool, this is bad!")
+		return Fatal("Invariant broken")
+	}
+	poolDataSlot := crypto.Keccak256Hash(pool[:], storageOffsets.poolSlot[:])
+	// get current tick
+	slot0value := statedb.GetState(poolManagerAddress, common.Hash(poolDataSlot))
+
+	pcs.poolStateSlot.SetBytes(poolDataSlot[:])
+	poolLogger.Debug("Trying to access state", "slot", pcs.poolStateSlot)
+
+	pcs.currTick = convert24BitToInt(extractBigEndianUint24(slot0value[:], 9))
+	poolLogger.Debug("Pool state", "tick", pcs.currTick)
+	pcs.sqrtPriceX96.SetBytes(slot0value[12:32])
+
+	if poolState.monitor0 {
+		pcs.bc.currency0Owed[pool] = new(uint256.Int)
+	}
+	if poolState.monitor1 {
+		pcs.bc.currency1Owed[pool] = new(uint256.Int)
+	}
+
+	pcs.positionMappingSlot.AddUint64(pcs.poolStateSlot, storageOffsets.positionsOffset)
+	pcs.tickMappingSlot.AddUint64(pcs.poolStateSlot, storageOffsets.tickOffset)
+	positionMappingSlotRaw := pcs.positionMappingSlot.Bytes32()
+	poolLogger.Debug("Pool state", "position slot", common.Hash(positionMappingSlotRaw))
+
+	poolLogger.Debug("Pool state", "num positions", len(poolState.positionsToRange))
+	// start position sums
+	for pos, tickRange := range poolState.positionsToRange {
+		positionLogger := poolLogger.With("position", pos)
+		positionInfoSlot := crypto.Keccak256Hash(pos.Bytes(), positionMappingSlotRaw[:])
+		positionState := PositionComputationState{
+			pcs:               pcs,
+			feeGrowthInside0X: nil,
+			feeGrowthInside1X: nil,
+			positionInfoSlot:  positionInfoSlot,
+			tickRange:         tickRange,
+			logger:            positionLogger,
+		}
+		positionState.processPosition(poolState, statedb)
+
+	}
+	return nil
+}
+
+var addressZeroPadding [12]byte
+
 func invariantChecks(
 	statedb *state.StateDB,
 	bc etherapi.BlockScanner,
@@ -863,7 +1104,6 @@ func invariantChecks(
 		return
 	}
 	poolsNeedWork := make(map[common.Hash]bool)
-	tokensNeedWork := make(map[common.Address]bool)
 	for _, p := range poolsToMonitor {
 		poolsNeedWork[p] = false
 	}
@@ -880,7 +1120,6 @@ func invariantChecks(
 	err = processLogs(allLogs, &logMultiExtractor{
 		inv:             &safeguardState,
 		poolsNeedsCheck: poolsNeedWork,
-		tokensNeedCheck: tokensNeedWork,
 	}, MODIFY|SWAP|INITIALIZE|TRANSFER)
 	if err != nil {
 		return
@@ -890,60 +1129,30 @@ func invariantChecks(
 		tickCache:     make(map[int]*uint256.Int),
 		signExtendBit: new(uint256.Int),
 	}
-	// map from pool ID to amount of currency0 owed for that pool
-	// if a key k appears in this map, there must be some token t s.t.
-	// t.poolTokens[k] == false
-	currency0Owed := make(map[common.Hash]*uint256.Int)
-	// map from pool ID to the amount of currency1 owed for that pool
-	// same invariant w.r.t. poolTokens, except t.poolTokens[k] == true
-	currency1Owed := make(map[common.Hash]*uint256.Int)
-
-	addToCurrency := func(owedMap map[common.Hash]*uint256.Int, pool common.Hash, amt *uint256.Int) {
-		curr, exists := owedMap[pool]
-		if !exists {
-			curr = new(uint256.Int)
-			owedMap[pool] = curr
-		}
-		curr.Add(curr, amt)
-	}
 	/*
 	   Find those tokens which do not have a running sum yet.
 	   Force all involved pools to recompute
 	*/
-	for t, tokenState := range safeguardState.tokenAddressToInfo {
+	for _, tokenState := range safeguardState.tokenAddressToInfo {
 		if !tokenState.ready {
 			continue
 		}
-		if tokenState.owed == nil {
-			for p, isCurrency0 := range tokenState.poolTokens {
-				pState := safeguardState.poolIdToInfo[p]
-				if !pState.ready {
-					continue
-				}
-				if isCurrency0 && pState.currency0ReqBalance == nil {
-					poolsNeedWork[p] = true
-				} else if !isCurrency0 && pState.currency1ReqBalance == nil {
-					poolsNeedWork[p] = true
-				}
+		for p, isCurrency0 := range tokenState.poolTokens {
+			pState := safeguardState.poolIdToInfo[p]
+			if !pState.ready {
+				continue
 			}
-
-			tokensNeedWork[t] = true
-		}
-		// this check is, technically speaking, redundant. But with all the mutability going on,
-		// I'd rather make these assumptions *very* explicit
-		if tokenState.protocolFees == nil || tokenState.transferBalances == nil {
-			if tokenState.owed != nil {
-				err = Fatal("Have nil protocol fees but we've computed the owed balance already?")
-				return
+			if isCurrency0 && pState.currency0ReqBalance == nil {
+				poolsNeedWork[p] = true
+			} else if !isCurrency0 && pState.currency1ReqBalance == nil {
+				poolsNeedWork[p] = true
 			}
-			tokensNeedWork[t] = true
-		} else if tokenState.protocolFees != nil {
-
 		}
 	}
 	// start pool computation
 	for pool, doCheck := range poolsNeedWork {
 		poolLogger := logger.With("pool", pool)
+		// TODO: send a "no changes" message to the server
 		if !doCheck {
 			poolLogger.Debug("No work needed")
 			continue
@@ -959,204 +1168,23 @@ func invariantChecks(
 			feeGrowthGlobal0:    nil,
 			feeGrowthGlobal1:    nil,
 			sqrtPriceX96:        new(uint256.Int),
+
+			key: pool,
+
+			liquidityNet:   make(map[int]*uint256.Int),
+			liquidityGross: make(map[int]*uint256.Int),
+
+			activePositions:        0,
+			totalPositionLiquidity: new(uint256.Int),
+			positionLiquidity:      new(uint256.Int),
 		}
-		poolState := safeguardState.poolIdToInfo[pool]
-		poolLogger.Debug("Working on pool", "monitor0", poolState.monitor0, "monitor1", poolState.monitor1)
-		if !poolState.ready {
-			poolLogger.Error("Trying to do work on an incomplete pool, this is bad!")
-			err = Fatal("Invariant broken")
-			return
-		}
-		psBytes := storageOffsets.poolSlot.Bytes32()
-		poolDataSlot := crypto.Keccak256Hash(pool[:], psBytes[:])
-		// get current tick
-		slot0value := statedb.GetState(poolManagerAddress, common.Hash(poolDataSlot))
-
-		pcs.poolStateSlot.SetBytes(poolDataSlot[:])
-		poolLogger.Debug("Trying to access state", "slot", pcs.poolStateSlot)
-
-		currTick := convert24BitToInt(extractBigEndianUint24(slot0value[:], 9))
-		poolLogger.Debug("Pool state", "tick", currTick)
-		pcs.sqrtPriceX96.SetBytes(slot0value[12:32])
-
-		if poolState.monitor0 {
-			currency0Owed[pool] = new(uint256.Int)
-		}
-		if poolState.monitor1 {
-			currency1Owed[pool] = new(uint256.Int)
-		}
-
-		getTickSumIn := func(m map[int]*uint256.Int, tick int) *uint256.Int {
-			var toRet *uint256.Int
-			var exists bool
-			if toRet, exists = m[tick]; !exists {
-				toRet = new(uint256.Int)
-				m[tick] = toRet
-			}
-			return toRet
-		}
-
-		liquidityGross := make(map[int]*uint256.Int)
-		liquidityNet := make(map[int]*uint256.Int)
-
-		totalPositionLiquidity := uint256.NewInt(0)
-		positionLiquidity := new(uint256.Int)
-
-		pcs.positionMappingSlot.AddUint64(pcs.poolStateSlot, storageOffsets.positionsOffset)
-		pcs.tickMappingSlot.AddUint64(pcs.poolStateSlot, storageOffsets.tickOffset)
-		positionMappingSlotRaw := pcs.positionMappingSlot.Bytes32()
-		poolLogger.Debug("Pool state", "position slot", common.Hash(positionMappingSlotRaw))
-
-		var activePositions uint64 = 0
-		poolLogger.Debug("Pool state", "num positions", len(poolState.positionsToRange))
-		foundNonZeroLiquidity := false
-		// start position sums
-		for pos, tickRange := range poolState.positionsToRange {
-			positionLogger := poolLogger.With("position", pos)
-			positionInfoSlot := crypto.Keccak256Hash(pos.Bytes(), positionMappingSlotRaw[:])
-			positionLogger.Debug("Position state", "liquidity slot", positionInfoSlot)
-			raw := statedb.GetState(poolManagerAddress, positionInfoSlot)
-			positionLiquidity.SetBytes(raw.Bytes())
-			positionLogger.Debug("Position state", "liquidity", positionLiquidity)
-			if !foundNonZeroLiquidity && positionLiquidity.GtUint64(0) {
-				foundNonZeroLiquidity = true
-			}
-			if tickRange.tickLower <= currTick && currTick < tickRange.tickUpper {
-				activePositions++
-				totalPositionLiquidity = totalPositionLiquidity.Add(totalPositionLiquidity, positionLiquidity)
-			}
-			grossLower := getTickSumIn(liquidityGross, tickRange.tickLower)
-			grossLower.Add(grossLower, positionLiquidity)
-			grossUpper := getTickSumIn(liquidityGross, tickRange.tickUpper)
-			grossUpper.Add(grossUpper, positionLiquidity)
-
-			netLower := getTickSumIn(liquidityNet, tickRange.tickLower)
-			netLower.Add(netLower, positionLiquidity)
-			netUpper := getTickSumIn(liquidityNet, tickRange.tickUpper)
-			netUpper.Sub(netUpper, positionLiquidity)
-
-			// now do some price computations, if needed
-			var feeGrowthInside0X, feeGrowthInside1X *uint256.Int = nil, nil
-			// loads the fee in the pcs.slotComputation and adds to the currency (0 for inside0 true or 1 for inside1 for false) based on the
-			// feeGrowthInside*X fields
-			computeFees := func(inside0 bool) *uint256.Int {
-
-				feeGrowthInsideKLastRaw := statedb.GetState(poolManagerAddress, pcs.slotComputation.Bytes32())
-				feeGrowthInsideLastKUint := new(uint256.Int)
-				feeGrowthInsideLastKUint.SetBytes(feeGrowthInsideKLastRaw[:])
-				if feeGrowthInside0X == nil {
-					feeGrowthInside0X, feeGrowthInside1X = pcs.feeGrowthInside(statedb, currTick, tickRange.tickLower, tickRange.tickUpper)
-				}
-				positionLogger.Debug("Fee computation parameters",
-					"feeGrowthInsideValue", feeGrowthInsideLastKUint,
-					"feeGrowthInside0X", feeGrowthInside0X,
-					"feeGrowthInside1X", feeGrowthInside1X,
-					"positionLiquidity", positionLiquidity,
-					"tickLower", tickRange.tickLower,
-					"tickUpper", tickRange.tickUpper,
-					"is currency0?", inside0,
-				)
-				var feeGrowthToSubtractFrom *uint256.Int
-				if inside0 {
-					feeGrowthToSubtractFrom = feeGrowthInside0X
-				} else {
-					feeGrowthToSubtractFrom = feeGrowthInside1X
-				}
-				feeGrowthInsideLastKUint.Sub(feeGrowthToSubtractFrom, feeGrowthInsideLastKUint)
-				pcs.bc.pc.mulDiv(feeGrowthInsideLastKUint, positionLiquidity, pcs.bc.pc.namedConstant.Q128, feeGrowthInsideLastKUint)
-				if inside0 {
-					addToCurrency(currency0Owed, pool, feeGrowthInsideLastKUint)
-				} else {
-					addToCurrency(currency1Owed, pool, feeGrowthInsideLastKUint)
-				}
-				positionLogger.Debug("Fee result", "result", feeGrowthInsideLastKUint)
-				return feeGrowthInsideLastKUint
-			}
-			positionLogger.Debug("> start fee computation")
-			if poolState.monitor0 {
-				positionLogger.Debug(">> Start token balance computation", "token", poolState.currency0)
-				// hold onto your butts.gif
-				pcs.slotComputation.SetBytes(positionInfoSlot[:])
-				pcs.slotComputation.AddUint64(pcs.slotComputation, storageOffsets.feeGrowthInside0Offset)
-				scratchUint := computeFees(true)
-
-				// now let's compute how much is owed for this position
-				tickLowerPrice := pcs.bc.getSqrtRatioAtTick(tickRange.tickLower)
-				tickUpperPrice := pcs.bc.getSqrtRatioAtTick(tickRange.tickUpper)
-
-				positionLogger.Debug(">> Price parameters",
-					"token", poolState.currency0,
-					"tickLowerPrice", tickLowerPrice,
-					"tickUpperPrice", tickUpperPrice,
-					"sqrtPriceX96", pcs.sqrtPriceX96,
-					"liquidity", positionLiquidity,
-					"tickLower", tickRange.tickLower,
-					"tickUpper", tickRange.tickUpper,
-				)
-
-				pc := pcs.bc.pc
-				if tickLowerPrice.Gt(pcs.sqrtPriceX96) {
-					pc.sqrtRatioAX96.Set(tickLowerPrice)
-				} else {
-					pc.sqrtRatioAX96.Set(pcs.sqrtPriceX96)
-				}
-				if tickUpperPrice.Gt(pcs.sqrtPriceX96) {
-					pc.sqrtRatioBX96.Set(tickUpperPrice)
-				} else {
-					pc.sqrtRatioBX96.Set(pcs.sqrtPriceX96)
-				}
-				pc.getAmount0DeltaRoundDown(positionLiquidity, scratchUint)
-				positionLogger.Debug("<< Balance computation finished", "result", scratchUint)
-				addToCurrency(currency0Owed, pool, scratchUint)
-			}
-			if poolState.monitor1 {
-				positionLogger.Debug(">> Start token balance computation", "token", poolState.currency1)
-				pcs.slotComputation.SetBytes(positionInfoSlot[:])
-				pcs.slotComputation.AddUint64(pcs.slotComputation, storageOffsets.feeGrowthInside1Offset)
-
-				scratchUint := computeFees(false)
-
-				tickLowerPrice := pcs.bc.getSqrtRatioAtTick(tickRange.tickLower)
-				tickUpperPrice := pcs.bc.getSqrtRatioAtTick(tickRange.tickUpper)
-
-				positionLogger.Debug(">> Price parameters",
-					"token", poolState.currency0,
-					"tickLowerPrice", tickLowerPrice,
-					"tickUpperPrice", tickUpperPrice,
-					"sqrtPriceX96", pcs.sqrtPriceX96,
-					"liquidity", positionLiquidity,
-					"tickLower", tickRange.tickLower,
-					"tickUpper", tickRange.tickUpper,
-				)
-
-				pc := pcs.bc.pc
-				if tickLowerPrice.Lt(pcs.sqrtPriceX96) {
-					pc.sqrtRatioAX96.Set(tickLowerPrice)
-				} else {
-					pc.sqrtRatioAX96.Set(pcs.sqrtPriceX96)
-				}
-				if tickUpperPrice.Lt(pcs.sqrtPriceX96) {
-					pc.sqrtRatioBX96.Set(tickUpperPrice)
-				} else {
-					pc.sqrtRatioBX96.Set(pcs.sqrtPriceX96)
-				}
-				pc.getAmount1DeltaRoundDown(positionLiquidity, scratchUint)
-				addToCurrency(currency1Owed, pool, scratchUint)
-				positionLogger.Debug("<< Balance computation finished", "result", scratchUint)
-				// phew
-			}
-			positionLogger.Debug("< end fee computation")
-		}
-		// end position and owed sums
-		if !foundNonZeroLiquidity {
-			poolLogger.Warn("Found no non-zero liquidity in pool: sus")
-		}
+		pcs.processPool(statedb)
 		// start liquidity invariant checks
 		evmTick := new(uint256.Int)
 		visited := make(map[int]bool)
 		var tickError *TickError
 		var computationErr error
-		for tick, balanceGross := range liquidityGross {
+		for tick, balanceGross := range pcs.liquidityGross {
 			pcs.slotForTickState(tick)
 			tickLiquidity := statedb.GetState(poolManagerAddress, pcs.tickStateSlot.Bytes32())
 			// the liquidity is packed into a single word, liquidity net is in the upper 128 bits
@@ -1173,7 +1201,7 @@ func invariantChecks(
 				break
 			}
 			// now check liquidity net
-			balanceNet, exists := liquidityNet[tick]
+			balanceNet, exists := pcs.liquidityNet[tick]
 			if !exists {
 				computationErr = fmt.Errorf("Mismatched keys, have %d in gross, but not in net for pool %s", tick, pool)
 				break
@@ -1204,25 +1232,49 @@ func invariantChecks(
 		// pool liquidity
 		pcs.poolStateSlot.AddUint64(pcs.poolStateSlot, storageOffsets.liquidityOffset)
 		rawLiq := statedb.GetState(poolManagerAddress, pcs.poolStateSlot.Bytes32())
-		poolLiquidity := positionLiquidity.SetBytes(rawLiq[:])
+		poolLiquidity := pcs.positionLiquidity.SetBytes(rawLiq[:])
 
-		liquidityInvariantHolds := totalPositionLiquidity.Cmp(poolLiquidity) == 0
+		liquidityInvariantHolds := pcs.totalPositionLiquidity.Cmp(poolLiquidity) == 0
 		updateMessage := map[string]interface{}{
 			"tickError":       tickError,
 			"invariantResult": liquidityInvariantHolds && tickError != nil,
-			"currentTick":     currTick,
+			"currentTick":     pcs.currTick,
 			"currBlock":       blockNumber.Uint64(),
-			"activePositions": activePositions,
-			"totalLiquidity":  totalPositionLiquidity.Hex(),
+			"activePositions": pcs.activePositions,
+			"totalLiquidity":  pcs.totalPositionLiquidity.Hex(),
 			"poolLiquidity":   poolLiquidity.Hex(),
 		}
-		poolLogger.Info("Invariant result", "holds", liquidityInvariantHolds, "pool liquidity", positionLiquidity, "active position liquidity", totalPositionLiquidity)
+		poolLogger.Info("Invariant result", "holds", liquidityInvariantHolds, "pool liquidity", pcs.positionLiquidity, "active position liquidity", pcs.totalPositionLiquidity)
 		serverErr := postUpdate(poolUpdateEndpoint, pool.Hex(), updateMessage)
 		if serverErr != nil {
 			// logger.Warn("Failed to update web server", "err", serverErr)
 		}
 	}
-	deltaMath := new(uint256.Int)
+
+	getLatestCurrencyGen := func(poolKey common.Hash, workResultMap map[common.Hash]*uint256.Int, fieldGetter func(*PoolState) *uint256.Int) (*uint256.Int, error) {
+		if !poolsNeedWork[poolKey] {
+			p := safeguardState.poolIdToInfo[poolKey]
+			req := fieldGetter(p)
+			if req == nil {
+				return nil, Fatal(fmt.Sprintf("Didn't want to work on pool %s, but it's currency isn't ready?", poolKey))
+			}
+			return req, nil
+		} else {
+			owed, exists := workResultMap[poolKey]
+			if !exists {
+				poolInfo := safeguardState.poolIdToInfo[poolKey]
+				return nil, Fatal(fmt.Sprintf("Needed to do work on pool %s, but we didn't do it %s (%t) and %s (%t)?", poolKey, poolInfo.currency0, poolInfo.monitor0, poolInfo.currency1, poolInfo.monitor1))
+			}
+			return owed, nil
+		}
+	}
+	getLatestCurrency1 := func(poolKey common.Hash) (*uint256.Int, error) {
+		return getLatestCurrencyGen(poolKey, perCheckState.currency1Owed, func(ps *PoolState) *uint256.Int { return ps.currency1ReqBalance })
+	}
+	getLatestCurrency0 := func(poolKey common.Hash) (*uint256.Int, error) {
+		return getLatestCurrencyGen(poolKey, perCheckState.currency0Owed, func(ps *PoolState) *uint256.Int { return ps.currency0ReqBalance })
+	}
+
 	/*
 	  TODO: jtoman factor in 6909 (nice) transfer events
 	*/
@@ -1231,81 +1283,16 @@ func invariantChecks(
 		return
 	}
 
+	owed := new(uint256.Int)
+	toAdd := new(uint256.Int)
+
 	for token, tokenState := range safeguardState.tokenAddressToInfo {
+		owed.Clear()
 		if !tokenState.ready {
 			continue
 		}
-		if b, exists := tokensNeedWork[token]; !exists || !b {
-			// TODO: send "no change" message to server
-			continue
-		}
 		tokenLogger := logger.With("token", token)
-		isIncremental := tokenState.owed != nil
 		isIncomplete := false
-		if !isIncremental {
-			tokenState.owed = new(uint256.Int)
-		}
-		getLatestCurrencyGen := func(poolKey common.Hash, workResultMap map[common.Hash]*uint256.Int, fieldGetter func(*PoolState) *uint256.Int) (*uint256.Int, error) {
-			if !poolsNeedWork[poolKey] {
-				p := safeguardState.poolIdToInfo[poolKey]
-				req := fieldGetter(p)
-				if req == nil {
-					return nil, Fatal(fmt.Sprintf("Didn't want to work on pool %s, but it's currency isn't ready?", poolKey))
-				}
-				return req, nil
-			} else {
-				owed, exists := workResultMap[poolKey]
-				if !exists {
-					poolInfo := safeguardState.poolIdToInfo[poolKey]
-					return nil, Fatal(fmt.Sprintf("Needed to do work on pool %s for token %s, but we didn't do it %s (%t) and %s (%t)?", poolKey, token, poolInfo.currency0, poolInfo.monitor0, poolInfo.currency1, poolInfo.monitor1))
-				}
-				return owed, nil
-			}
-		}
-		getLatestCurrency1 := func(poolKey common.Hash) (*uint256.Int, error) {
-			return getLatestCurrencyGen(poolKey, currency1Owed, func(ps *PoolState) *uint256.Int { return ps.currency1ReqBalance })
-		}
-		getLatestCurrency0 := func(poolKey common.Hash) (*uint256.Int, error) {
-			return getLatestCurrencyGen(poolKey, currency0Owed, func(ps *PoolState) *uint256.Int { return ps.currency0ReqBalance })
-		}
-
-		applyRequiredAmountDelta := func(isCurrency1 bool, poolState *PoolState) error {
-			var currAmount, newAmount *uint256.Int
-			var exists bool
-			if !isCurrency1 {
-				currAmount = poolState.currency0ReqBalance
-				newAmount, exists = currency0Owed[poolState.key]
-				if !exists {
-					return Fatal("needed to do work, but didn't actually compute required amounts")
-				}
-			} else {
-				currAmount = poolState.currency1ReqBalance
-				newAmount, exists = currency1Owed[poolState.key]
-				if !exists {
-					return Fatal("needed to do work, but didn't actually compute required amounts")
-				}
-			}
-			if currAmount == nil {
-				// then this is a fresh pool, just add the balance directly
-				tokenState.owed.Add(tokenState.owed, newAmount)
-				return nil
-			}
-			// otherwise, subtract or add, depending on the difference
-			cmp := currAmount.Cmp(newAmount)
-			// no change
-			if cmp == 0 {
-				return nil
-			} else if cmp < 0 {
-				// currAmount is less than new amount, so compute how much to add
-				deltaMath.Sub(newAmount, currAmount)
-				tokenState.owed.Add(tokenState.owed, deltaMath)
-			} else {
-				// currAmount is greater than new amount, so compute how much to subtract
-				deltaMath.Sub(currAmount, newAmount)
-				tokenState.owed.Sub(tokenState.owed, deltaMath)
-			}
-			return nil
-		}
 		for poolKey, isCurrency1 := range tokenState.poolTokens {
 			pState := safeguardState.poolIdToInfo[poolKey]
 			if !pState.ready {
@@ -1313,29 +1300,33 @@ func invariantChecks(
 				continue
 			}
 			// this is the easier version
-			if !isIncremental {
-				var amt *uint256.Int
-				if isCurrency1 {
-					amt, err = getLatestCurrency1(poolKey)
-				} else {
-					amt, err = getLatestCurrency0(poolKey)
-				}
-				if err != nil {
-					return
-				}
-				tokenState.owed.Add(tokenState.owed, amt)
-				continue
+			var amt *uint256.Int
+			if isCurrency1 {
+				amt, err = getLatestCurrency1(poolKey)
+			} else {
+				amt, err = getLatestCurrency0(poolKey)
 			}
-			// no need to update the incremental amount
-			if !poolsNeedWork[poolKey] {
-				continue
-			}
-			// otherwise compute the diff
-			err = applyRequiredAmountDelta(isCurrency1, pState)
 			if err != nil {
 				return
 			}
+			owed.Add(owed, amt)
 		}
+
+		// protocol fees
+
+		tokenAccruedSlot := crypto.Keccak256(addressZeroPadding[:], token.Bytes(), storageOffsets.protocolFeesAccruedSlot[:])
+		tokenAccruedRaw := statedb.GetState(poolManagerAddress, common.Hash(tokenAccruedSlot))
+		toAdd.SetBytes(tokenAccruedRaw[:])
+		owed.Add(owed, toAdd)
+
+		// now for transfer events
+		for p, _ := range tokenState.tokenBalances {
+			userBalancesSlot := crypto.Keccak256(addressZeroPadding[:], p.Bytes(), storageOffsets.balanceOfSlot[:])
+			balanceOfSlot := crypto.Keccak256(addressZeroPadding[:], token.Bytes(), userBalancesSlot)
+			toAdd.SetBytes(balanceOfSlot)
+			owed.Add(owed, toAdd)
+		}
+
 		// the token amount should now be equal to the sum of balances reqd by positions
 		// check that the holds for the pool is correct
 		var actualBalance *uint256.Int
@@ -1359,12 +1350,12 @@ func invariantChecks(
 			tokenLogger.Warn("Failed getting balance of pool", "err", computationErr)
 			continue
 		}
-		invariantHolds := !tokenState.owed.Gt(actualBalance)
-		tokenLogger.Debug(fmt.Sprintf("Invariant check status: %s <= %s %t", tokenState.owed, actualBalance, invariantHolds))
+		invariantHolds := !owed.Gt(actualBalance)
+		tokenLogger.Debug(fmt.Sprintf("Invariant check status: %s <= %s %t", owed, actualBalance, invariantHolds))
 		payload := map[string]interface{}{
 			"currBlock":       blockNumber.Uint64(),
 			"invariantResult": invariantHolds,
-			"requiredBalance": tokenState.owed.Hex(),
+			"requiredBalance": owed.Hex(),
 			"actualBalance":   actualBalance.Hex(),
 			"incomplete":      isIncomplete,
 		}
@@ -1374,13 +1365,13 @@ func invariantChecks(
 		}
 	}
 	// finally, "commit" any existing updates to the currency balances for a pool
-	for p, amt := range currency0Owed {
+	for p, amt := range perCheckState.currency0Owed {
 		if safeguardState.poolIdToInfo[p].currency0ReqBalance == nil {
 			safeguardState.poolIdToInfo[p].currency0ReqBalance = new(uint256.Int)
 		}
 		safeguardState.poolIdToInfo[p].currency0ReqBalance.Set(amt)
 	}
-	for p, amt := range currency1Owed {
+	for p, amt := range perCheckState.currency1Owed {
 		if safeguardState.poolIdToInfo[p].currency1ReqBalance == nil {
 			safeguardState.poolIdToInfo[p].currency1ReqBalance = new(uint256.Int)
 		}
