@@ -1086,22 +1086,30 @@ func invariantChecks(
 	blockNumber big.Int,
 	mr *etherapi.MockRunner,
 	allLogs []*types.Log,
-) (err error) {
+) error {
+	err := invariantChecksInner(statedb, bc, blockNumber, mr, allLogs)
+	if err != nil {
+		safeguardState.Reset()
+	}
+	return err
+}
+
+func invariantChecksInner(
+	statedb *state.StateDB,
+	bc etherapi.BlockScanner,
+	blockNumber big.Int,
+	mr *etherapi.MockRunner,
+	allLogs []*types.Log,
+) error {
 	start := time.Now()
 	if safeguardState.poolIdToInfo == nil {
 		safeguardState.poolIdToInfo = make(map[common.Hash]*PoolState)
 		safeguardState.tokenAddressToInfo = make(map[common.Address]*TokenState)
 	}
-
-	defer func() {
-		if err != nil {
-			safeguardState.Reset()
-		}
-	}()
 	poolsToMonitor, fresh, err := safeguardState.getMonitoredPools(bc, blockNumber.Uint64())
 	if err != nil {
 		logger.Error("Monitoring task loading failed, clearing all statuses", "err", err)
-		return
+		return err
 	}
 	poolsNeedWork := make(map[common.Hash]bool)
 	for _, p := range poolsToMonitor {
@@ -1122,7 +1130,7 @@ func invariantChecks(
 		poolsNeedsCheck: poolsNeedWork,
 	}, MODIFY|SWAP|INITIALIZE|TRANSFER)
 	if err != nil {
-		return
+		return err
 	}
 	perCheckState := BlockComputationState{
 		pc:            getPC(),
@@ -1275,12 +1283,9 @@ func invariantChecks(
 		return getLatestCurrencyGen(poolKey, perCheckState.currency0Owed, func(ps *PoolState) *uint256.Int { return ps.currency0ReqBalance })
 	}
 
-	/*
-	  TODO: jtoman factor in 6909 (nice) transfer events
-	*/
 	balanceOfSelectorAndPadding, err := hex.DecodeString("70a08231000000000000000000000000")
 	if err != nil {
-		return
+		return err
 	}
 
 	owed := new(uint256.Int)
@@ -1307,7 +1312,7 @@ func invariantChecks(
 				amt, err = getLatestCurrency0(poolKey)
 			}
 			if err != nil {
-				return
+				return err
 			}
 			owed.Add(owed, amt)
 		}
