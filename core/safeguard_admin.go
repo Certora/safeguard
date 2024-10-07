@@ -59,7 +59,7 @@ func (s *safeguardState) reload(p string) error {
 	impl, ok := sym.(etherapi.InvariantChecker)
 	if !ok {
 		s.pause()
-		return fmt.Errorf("Detector from %p was not an InvariantChecker, pausing checking", p)
+		return fmt.Errorf("Detector from %s was not an InvariantChecker, pausing checking", p)
 	}
 	fmt.Printf("Successfully loaded new implementation, updating pointer, and enabling\n")
 	s.enabled = true
@@ -208,7 +208,7 @@ func tryLoadInitial() {
 func loadInitial() {
 	p, exists := os.LookupEnv(PluginPathEnv)
 	if !exists {
-		fmt.Print("Requested initial load, but %s not set, taking no further action\n", PluginPathEnv)
+		fmt.Printf("Requested initial load, but %s not set, taking no further action\n", PluginPathEnv)
 		return
 	}
 	safeguardImpl.reload(p)
@@ -234,7 +234,7 @@ func (s *safeguardAdminServer) handleConnection(conn net.Conn) {
 			"message": err.Error(),
 		})
 		if err != nil {
-			fmt.Printf("Had an error writing an error %w: how ironic!\n", err)
+			fmt.Printf("Had an error writing an error %v: how ironic!\n", err)
 		}
 		write(string(msg))
 	}
@@ -277,7 +277,7 @@ func (s *safeguardAdminServer) handleConnection(conn net.Conn) {
 			return
 		}
 		if err != nil {
-			fmt.Printf("Error executing action %s: %w", message, err)
+			fmt.Printf("Error executing action %s: %v", message, err)
 			reject(err)
 		} else {
 			accept()
@@ -311,12 +311,12 @@ func initSafeguardSocket() {
 	}
 	server, err := newIpcAdminServer(socketPath, stdHandler)
 	if err != nil {
-		fmt.Printf("Error creating server %w: taking no further action\n", err)
+		fmt.Printf("Error creating server %v: taking no further action\n", err)
 		return
 	}
 	err = server.start()
 	if err != nil {
-		fmt.Printf("Failed to start server: %w, taking no further action\n", err)
+		fmt.Printf("Failed to start server: %v, taking no further action\n", err)
 	}
 }
 
@@ -339,7 +339,7 @@ func initSafeguardTCP() {
 	}
 	err := server.start()
 	if err != nil {
-		fmt.Printf("Failed to start server: %w, taking no further action\n", err)
+		fmt.Printf("Failed to start server: %v, taking no further action\n", err)
 	}
 }
 

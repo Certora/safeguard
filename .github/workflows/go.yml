@@ -2,14 +2,14 @@ name: i386 linux tests
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, shelly/fixtest ]
   pull_request:
-    branches: [ master ]
+    branches: [ master, shelly/fixtest ]
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Set up Go
