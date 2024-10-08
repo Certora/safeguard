@@ -58,7 +58,7 @@ func ExecuteStateless(config *params.ChainConfig, witness *stateless.Witness) (c
 	validator := NewBlockValidator(config, nil) // No chain, we only validate the state, not the block
 
 	// Run the stateless blocks processing and self-validate certain fields
-	receipts, _, usedGas, err := processor.Process(witness.Block, db, vm.Config{})
+	receipts, _, usedGas, err := processor.Process(witness.Block, db, vm.Config{}, nil)
 	if err != nil {
 		return common.Hash{}, common.Hash{}, err
 	}
