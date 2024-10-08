@@ -1,4 +1,4 @@
-name: Build and Push Docker image to ECR
+name: Build Docker image
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
       - safeguard
 
 jobs:
-  build:
+  build-and-push:
     runs-on: ubuntu-latest
     if: ${{ github.ref == 'refs/heads/safeguard' }}
     permissions:
@@ -41,7 +41,7 @@ jobs:
         run: |
           docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG .
           docker push $REGISTRY/$REPOSITORY:$IMAGE_TAG
-  test:
+  build-test:
     runs-on: ubuntu-latest
     if: ${{ github.ref != 'refs/heads/safeguard' }}
     steps:
