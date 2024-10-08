@@ -1273,7 +1273,7 @@ func invariantChecksInner(
 		rawLiq := statedb.GetState(poolManagerAddress, pcs.poolStateSlot.Bytes32())
 		poolLiquidity := pcs.positionLiquidity.SetBytes(rawLiq[:])
 
-		liquidityInvariantHolds := pcs.totalPositionLiquidity.Cmp(poolLiquidity) == 0
+		liquidityInvariantHolds := pcs.totalPositionLiquidity.Cmp(poolLiquidity) == 0 && tickError != nil
 		updateMessage := map[string]interface{}{
 			"tickError":       tickError,
 			"invariantResult": liquidityInvariantHolds && tickError != nil,
