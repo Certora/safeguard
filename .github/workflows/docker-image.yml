@@ -1,0 +1,54 @@
+name: Build and Push Docker image to ECR
+
+on:
+  push:
+    branches:
+      - safeguard
+  pull_request:
+    branches:
+      - safeguard
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: ${{ github.ref == 'refs/heads/safeguard' }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      # Checkout the repository
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Login to AWS
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.ARTIFACTS_OIDC_ROLE }}
+          aws-region: ${{ secrets.ARTIFACTS_DEFAULT_REGION }}
+
+      # Login to AWS Artifacts ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Build the Docker image and push it
+      - name: Build, tag, and push docker image to Amazon ECR
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: eth-monitoring
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG .
+          docker push $REGISTRY/$REPOSITORY:$IMAGE_TAG
+  test:
+    runs-on: ubuntu-latest
+    if: ${{ github.ref != 'refs/heads/safeguard' }}
+    steps:
+      # Checkout the repository
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Build the Docker image
+      - name: Build docker
+        run: docker build .
