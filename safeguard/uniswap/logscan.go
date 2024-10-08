@@ -66,7 +66,7 @@ func (p *poolInitScan) onTransfer(token, to, from common.Address, amount *uint25
 	if p.tokenAddress != token {
 		return
 	}
-	p.tokenState.tokenBalances[to] = true
+	p.tokenState.balanceOfKeys[to] = true
 }
 
 type positionExtractor struct {
@@ -224,7 +224,7 @@ func (lme *logMultiExtractor) onTransfer(token, from, to common.Address, amt *ui
 	if !exists {
 		return
 	}
-	t.tokenBalances[to] = true
+	t.balanceOfKeys[to] = true
 }
 
 func (lme *logMultiExtractor) poolFilter(pool common.Hash) bool {

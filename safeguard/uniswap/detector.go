@@ -359,7 +359,7 @@ func (st *InvariantState) loadTokenPools(tokenAddress common.Address, bc etherap
 			return nil, fmt.Errorf("Incorrect type for address, expected string")
 		}
 		addr := common.HexToAddress(addressString)
-		tokenState.tokenBalances[addr] = true
+		tokenState.balanceOfKeys[addr] = true
 	}
 
 	lastTransferBlock, err := extractLastBlock(result)
@@ -467,8 +467,11 @@ func (st *InvariantState) getMonitoredPools(bc etherapi.BlockScanner, currBlock 
 		if !exists {
 			tokenLogger.Info("Got new request to monitor token")
 			tokenData = &TokenState{
-				poolTokens: make(map[common.Hash]bool),
-				ready:      false,
+				poolTokens:      make(map[common.Hash]bool),
+				ready:           false,
+				balanceOfKeys:   make(map[common.Address]bool),
+				poolBalanceOwed: new(uint256.Int),
+				poolBalances:    make(map[common.Hash]*uint256.Int),
 			}
 			st.tokenAddressToInfo[tokenId] = tokenData
 		}
@@ -680,14 +683,6 @@ func init() {
 	safeguardState.poolIdToInfo = make(map[common.Hash]*PoolState)
 	safeguardState.tokenAddressToInfo = make(map[common.Address]*TokenState)
 	initPC()
-	go func() {
-		for {
-			time.Sleep(time.Duration(5) * time.Second)
-			logger.Debug("Hello")
-			logger.Info("Hello World")
-			logger.Error("Blerp")
-		}
-	}()
 }
 
 var safeguardState InvariantState
@@ -841,23 +836,6 @@ func (pcs *PoolComputationState) feeGrowthInside(
 	return feeGrowthInside0X128, feeGrowthInside1X128
 }
 
-func addToCurrencyGen(owedMap map[common.Hash]*uint256.Int, pool common.Hash, amt *uint256.Int) {
-	curr, exists := owedMap[pool]
-	if !exists {
-		curr = new(uint256.Int)
-		owedMap[pool] = curr
-	}
-	curr.Add(curr, amt)
-}
-
-func (bc *BlockComputationState) addToCurrency0(pool common.Hash, amt *uint256.Int) {
-	addToCurrencyGen(bc.currency0Owed, pool, amt)
-}
-
-func (bc *BlockComputationState) addToCurrency1(pool common.Hash, amt *uint256.Int) {
-	addToCurrencyGen(bc.currency1Owed, pool, amt)
-}
-
 func getTickSumIn(m map[int]*uint256.Int, tick int) *uint256.Int {
 	var toRet *uint256.Int
 	var exists bool
@@ -874,6 +852,14 @@ func (pcs *PoolComputationState) getGrossTickSum(tick int) *uint256.Int {
 
 func (pcs *PoolComputationState) getNetTickSum(tick int) *uint256.Int {
 	return getTickSumIn(pcs.liquidityNet, tick)
+}
+
+func (pcs *PoolComputationState) addToCurrency1(amt *uint256.Int) {
+	pcs.currency1Owed.Add(pcs.currency1Owed, amt)
+}
+
+func (pcs *PoolComputationState) addToCurrency0(amt *uint256.Int) {
+	pcs.currency0Owed.Add(pcs.currency0Owed, amt)
 }
 
 func (pos *PositionComputationState) getFeeGrowthInside(statedb *state.StateDB) (*uint256.Int, *uint256.Int) {
@@ -917,9 +903,9 @@ func (pos *PositionComputationState) computeFees(statedb *state.StateDB, inside0
 	feeGrowthInsideLastKUint.Sub(feeGrowthToSubtractFrom, feeGrowthInsideLastKUint)
 	pos.pcs.bc.pc.mulDiv(feeGrowthInsideLastKUint, pos.pcs.positionLiquidity, pos.pcs.bc.pc.namedConstant.Q128, feeGrowthInsideLastKUint)
 	if inside0 {
-		pos.pcs.bc.addToCurrency0(pos.pcs.key, feeGrowthInsideLastKUint)
+		pos.pcs.addToCurrency0(feeGrowthInsideLastKUint)
 	} else {
-		pos.pcs.bc.addToCurrency1(pos.pcs.key, feeGrowthInsideLastKUint)
+		pos.pcs.addToCurrency1(feeGrowthInsideLastKUint)
 	}
 	pos.logger.Debug("Fee result", "result", feeGrowthInsideLastKUint)
 	return feeGrowthInsideLastKUint
@@ -983,7 +969,7 @@ func (pos *PositionComputationState) processPosition(
 		}
 		pc.getAmount0DeltaRoundDown(pcs.positionLiquidity, scratchUint)
 		positionLogger.Debug("<< Balance computation finished", "result", scratchUint)
-		pcs.bc.addToCurrency0(poolState.key, scratchUint)
+		pcs.addToCurrency0(scratchUint)
 	}
 	if poolState.monitor1 {
 		positionLogger.Debug(">> Start token balance computation", "token", poolState.currency1)
@@ -1017,7 +1003,7 @@ func (pos *PositionComputationState) processPosition(
 			pc.sqrtRatioBX96.Set(pcs.sqrtPriceX96)
 		}
 		pc.getAmount1DeltaRoundDown(pcs.positionLiquidity, scratchUint)
-		pcs.bc.addToCurrency1(poolState.key, scratchUint)
+		pcs.addToCurrency1(scratchUint)
 		positionLogger.Debug("<< Balance computation finished", "result", scratchUint)
 		// phew
 	}
@@ -1048,10 +1034,10 @@ func (pcs *PoolComputationState) processPool(
 	pcs.sqrtPriceX96.SetBytes(slot0value[12:32])
 
 	if poolState.monitor0 {
-		pcs.bc.currency0Owed[pool] = new(uint256.Int)
+		pcs.currency0Owed = new(uint256.Int)
 	}
 	if poolState.monitor1 {
-		pcs.bc.currency1Owed[pool] = new(uint256.Int)
+		pcs.currency1Owed = new(uint256.Int)
 	}
 
 	pcs.positionMappingSlot.AddUint64(pcs.poolStateSlot, storageOffsets.positionsOffset)
@@ -1073,7 +1059,20 @@ func (pcs *PoolComputationState) processPool(
 			logger:            positionLogger,
 		}
 		positionState.processPosition(poolState, statedb)
-
+	}
+	if poolState.monitor0 {
+		ts, exists := safeguardState.tokenAddressToInfo[poolState.currency0]
+		if !exists {
+			return Fatal(fmt.Sprintf("Expected to find token state for %s, didn't exist", poolState.currency0))
+		}
+		ts.reportPoolBalance(pool, pcs.currency0Owed)
+	}
+	if poolState.monitor1 {
+		ts, exists := safeguardState.tokenAddressToInfo[poolState.currency1]
+		if !exists {
+			return Fatal(fmt.Sprintf("Expected to find token state for monitored token %s, didn't exist", poolState.currency1))
+		}
+		ts.reportPoolBalance(pool, pcs.currency1Owed)
 	}
 	return nil
 }
@@ -1092,6 +1091,40 @@ func invariantChecks(
 		safeguardState.Reset()
 	}
 	return err
+}
+
+func (t *TokenState) reportPoolBalance(pool common.Hash, amount *uint256.Int) error {
+	curr, exists := t.poolBalances[pool]
+	if !exists {
+		curr = new(uint256.Int)
+		t.poolBalances[pool] = curr
+	}
+	// first time seeing this pool, or first time computation (the effect is the same)
+	if !exists {
+		curr.Set(amount)
+		t.poolBalanceOwed.Add(t.poolBalanceOwed, amount)
+		return nil
+	}
+	// no net change
+	if amount.Eq(curr) {
+		return nil
+
+		// balance decrease, compute the absolute difference and subtract
+		// amount < curr
+	} else if amount.Lt(curr) {
+		diff := new(uint256.Int)
+		// diff = curr - amount
+		diff.Sub(curr, amount)
+		// balance = balance - (curr - amount)
+		t.poolBalanceOwed.Sub(t.poolBalanceOwed, diff)
+	} else {
+		// amount is increasing
+		diff := new(uint256.Int)
+		diff.Sub(amount, curr)
+		t.poolBalanceOwed.Add(t.poolBalanceOwed, diff)
+	}
+	curr.Set(amount)
+	return nil
 }
 
 func invariantChecksInner(
@@ -1145,14 +1178,12 @@ func invariantChecksInner(
 		if !tokenState.ready {
 			continue
 		}
-		for p, isCurrency0 := range tokenState.poolTokens {
+		for p, _ := range tokenState.poolTokens {
 			pState := safeguardState.poolIdToInfo[p]
 			if !pState.ready {
 				continue
 			}
-			if isCurrency0 && pState.currency0ReqBalance == nil {
-				poolsNeedWork[p] = true
-			} else if !isCurrency0 && pState.currency1ReqBalance == nil {
+			if _, exists := tokenState.poolBalances[p]; !exists {
 				poolsNeedWork[p] = true
 			}
 		}
@@ -1259,30 +1290,6 @@ func invariantChecksInner(
 		}
 	}
 
-	getLatestCurrencyGen := func(poolKey common.Hash, workResultMap map[common.Hash]*uint256.Int, fieldGetter func(*PoolState) *uint256.Int) (*uint256.Int, error) {
-		if !poolsNeedWork[poolKey] {
-			p := safeguardState.poolIdToInfo[poolKey]
-			req := fieldGetter(p)
-			if req == nil {
-				return nil, Fatal(fmt.Sprintf("Didn't want to work on pool %s, but it's currency isn't ready?", poolKey))
-			}
-			return req, nil
-		} else {
-			owed, exists := workResultMap[poolKey]
-			if !exists {
-				poolInfo := safeguardState.poolIdToInfo[poolKey]
-				return nil, Fatal(fmt.Sprintf("Needed to do work on pool %s, but we didn't do it %s (%t) and %s (%t)?", poolKey, poolInfo.currency0, poolInfo.monitor0, poolInfo.currency1, poolInfo.monitor1))
-			}
-			return owed, nil
-		}
-	}
-	getLatestCurrency1 := func(poolKey common.Hash) (*uint256.Int, error) {
-		return getLatestCurrencyGen(poolKey, perCheckState.currency1Owed, func(ps *PoolState) *uint256.Int { return ps.currency1ReqBalance })
-	}
-	getLatestCurrency0 := func(poolKey common.Hash) (*uint256.Int, error) {
-		return getLatestCurrencyGen(poolKey, perCheckState.currency0Owed, func(ps *PoolState) *uint256.Int { return ps.currency0ReqBalance })
-	}
-
 	balanceOfSelectorAndPadding, err := hex.DecodeString("70a08231000000000000000000000000")
 	if err != nil {
 		return err
@@ -1298,37 +1305,27 @@ func invariantChecksInner(
 		}
 		tokenLogger := logger.With("token", token)
 		isIncomplete := false
-		for poolKey, isCurrency1 := range tokenState.poolTokens {
+		for poolKey, _ := range tokenState.poolTokens {
 			pState := safeguardState.poolIdToInfo[poolKey]
 			if !pState.ready {
 				isIncomplete = true
-				continue
+				break
 			}
-			// this is the easier version
-			var amt *uint256.Int
-			if isCurrency1 {
-				amt, err = getLatestCurrency1(poolKey)
-			} else {
-				amt, err = getLatestCurrency0(poolKey)
-			}
-			if err != nil {
-				return err
-			}
-			owed.Add(owed, amt)
 		}
+		owed.Set(tokenState.poolBalanceOwed)
 
 		// protocol fees
-
 		tokenAccruedSlot := crypto.Keccak256(addressZeroPadding[:], token.Bytes(), storageOffsets.protocolFeesAccruedSlot[:])
 		tokenAccruedRaw := statedb.GetState(poolManagerAddress, common.Hash(tokenAccruedSlot))
 		toAdd.SetBytes(tokenAccruedRaw[:])
 		owed.Add(owed, toAdd)
 
 		// now for transfer events
-		for p, _ := range tokenState.tokenBalances {
+		for p, _ := range tokenState.balanceOfKeys {
 			userBalancesSlot := crypto.Keccak256(addressZeroPadding[:], p.Bytes(), storageOffsets.balanceOfSlot[:])
 			balanceOfSlot := crypto.Keccak256(addressZeroPadding[:], token.Bytes(), userBalancesSlot)
-			toAdd.SetBytes(balanceOfSlot)
+			amt := statedb.GetState(poolManagerAddress, common.Hash(balanceOfSlot))
+			toAdd.SetBytes(amt[:])
 			owed.Add(owed, toAdd)
 		}
 
@@ -1356,7 +1353,7 @@ func invariantChecksInner(
 			continue
 		}
 		invariantHolds := !owed.Gt(actualBalance)
-		tokenLogger.Debug(fmt.Sprintf("Invariant check status: %s <= %s %t", owed, actualBalance, invariantHolds))
+		tokenLogger.Info(fmt.Sprintf("Invariant check status: %s <= %s %t", owed, actualBalance, invariantHolds))
 		payload := map[string]interface{}{
 			"currBlock":       blockNumber.Uint64(),
 			"invariantResult": invariantHolds,
@@ -1368,19 +1365,6 @@ func invariantChecksInner(
 		if serverErr != nil {
 			// logger.Warn("Failed to update server", "err", serverErr)
 		}
-	}
-	// finally, "commit" any existing updates to the currency balances for a pool
-	for p, amt := range perCheckState.currency0Owed {
-		if safeguardState.poolIdToInfo[p].currency0ReqBalance == nil {
-			safeguardState.poolIdToInfo[p].currency0ReqBalance = new(uint256.Int)
-		}
-		safeguardState.poolIdToInfo[p].currency0ReqBalance.Set(amt)
-	}
-	for p, amt := range perCheckState.currency1Owed {
-		if safeguardState.poolIdToInfo[p].currency1ReqBalance == nil {
-			safeguardState.poolIdToInfo[p].currency1ReqBalance = new(uint256.Int)
-		}
-		safeguardState.poolIdToInfo[p].currency1ReqBalance.Set(amt)
 	}
 	if blockNumber.Uint64()%50 == 0 {
 		logger.Debug("Checking complete", "duration", time.Since(start))

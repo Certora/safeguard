@@ -31,8 +31,6 @@ type PoolState struct {
 
 	// for solvency monitoring
 	monitor0, monitor1, monitorLiquidity bool
-
-	currency0ReqBalance, currency1ReqBalance *uint256.Int
 }
 
 type PoolData struct {
@@ -48,11 +46,10 @@ type TokenState struct {
 	poolTokens map[common.Hash]bool // true (aka "1") for currency1, false (aka "0") for currency0 (get it?)
 	ready      bool
 
-	tokenBalances map[common.Address]bool
+	balanceOfKeys map[common.Address]bool
 
-	// protocolFees     *uint256.Int
-	// transferBalances *uint256.Int
-	//owed             *uint256.Int
+	poolBalances    map[common.Hash]*uint256.Int
+	poolBalanceOwed *uint256.Int
 }
 
 type InvariantState struct {
@@ -65,8 +62,6 @@ type BlockComputationState struct {
 	tickCache map[int]*uint256.Int
 
 	signExtendBit *uint256.Int
-
-	currency0Owed, currency1Owed map[common.Hash]*uint256.Int
 }
 
 type TickError struct {
@@ -87,6 +82,8 @@ type PoolComputationState struct {
 	liquidityGross, liquidityNet map[int]*uint256.Int
 
 	positionLiquidity, totalPositionLiquidity *uint256.Int
+
+	currency0Owed, currency1Owed *uint256.Int
 
 	activePositions uint64
 
