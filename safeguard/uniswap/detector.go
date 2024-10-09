@@ -257,7 +257,8 @@ func extractLastBlock(result map[string]interface{}) (uint64, error) {
 }
 
 func getPayload(context fmt.Stringer, result map[string]interface{}) (interface{}, error) {
-	doneRaw, exists := result["done"]
+	// TODO(jtoman): either add this done flag back in or remove this
+	/*doneRaw, exists := result["done"]
 	if !exists {
 		return nil, fmt.Errorf("No done status for %s", context)
 	}
@@ -268,7 +269,7 @@ func getPayload(context fmt.Stringer, result map[string]interface{}) (interface{
 	if !doneBool {
 		// nothing to do yet
 		return nil, nil
-	}
+	}*/
 	payloadRaw, exists := result["payload"]
 	if !exists {
 		return nil, fmt.Errorf("No payload for done result for %s", context)
@@ -289,7 +290,7 @@ POST:
 */
 func (st *InvariantState) loadTokenPools(tokenAddress common.Address, bc etherapi.BlockScanner, currBlock uint64) ([]common.Hash, error) {
 	result := make(map[string]interface{})
-	err := etherapi.QueryJsonEndpoint(fmt.Sprintf("token-pools?token=%s", strings.ToLower(tokenAddress.Hex())), &result)
+	err := etherapi.QueryJsonEndpoint(fmt.Sprintf("token-pools/%s", strings.ToLower(tokenAddress.Hex())), &result)
 	tokenLogger := logger.With("token", tokenAddress)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to fetch pools for token %s: %s", tokenAddress, err)
@@ -337,7 +338,7 @@ func (st *InvariantState) loadTokenPools(tokenAddress common.Address, bc etherap
 	if err != nil {
 		return nil, err
 	}
-
+	/* disabled while waiting for this to implemented
 	err = etherapi.QueryJsonEndpoint(fmt.Sprintf("token-transfers?token=%s", strings.ToLower(tokenAddress.Hex())), &result)
 	if err != nil {
 		return nil, fmt.Errorf("Could not fetch token transfer info %s", err)
@@ -365,8 +366,9 @@ func (st *InvariantState) loadTokenPools(tokenAddress common.Address, bc etherap
 	lastTransferBlock, err := extractLastBlock(result)
 	if err != nil {
 		return nil, err
-	}
-	untilBlock := min(lastTransferBlock, lastPoolBlock)
+	}*/
+	// untilBlock := min(lastTransferBlock, lastPoolBlock)
+	untilBlock := lastPoolBlock
 
 	extractor := &poolInitScan{
 		tokenAddress: tokenAddress,
@@ -374,9 +376,15 @@ func (st *InvariantState) loadTokenPools(tokenAddress common.Address, bc etherap
 		newPools:     make(map[common.Hash]bool),
 		tokenState:   tokenState,
 	}
-	err = bc.ScanBlocks(untilBlock, true, func(l []*types.Log) error {
-		return processLogs(l, extractor, MODIFY|INITIALIZE|TRANSFER)
-	})
+	// FIXME: the server should never be telling us last block 0, but it is
+	// for the time being, just don't scan blocks in this case
+	if lastPoolBlock != 0 {
+		err = bc.ScanBlocks(untilBlock, true, func(l []*types.Log) error {
+			return processLogs(l, extractor, MODIFY|INITIALIZE|TRANSFER)
+		})
+	} else {
+		err = nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -453,11 +461,10 @@ func (st *InvariantState) getMonitoredPools(bc etherapi.BlockScanner, currBlock 
 	var allPools = make([]*PoolState, 0, len(st.poolIdToInfo))
 
 	for _, p := range tokenItems {
-		tokenDict, ok := p.(map[string]interface{})
+		tokenAddress, ok := p.(string)
 		if !ok {
 			return nil, nil, fmt.Errorf("Token items was not of correct type")
 		}
-		tokenAddress, err := getKeyAs[string](tokenDict, "address", nil)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -618,7 +625,7 @@ func (st *InvariantState) loadInitialPositions(pool common.Hash, bc etherapi.Blo
 	start := time.Now()
 	root := map[string]interface{}{}
 
-	err := etherapi.QueryJsonEndpoint(fmt.Sprintf("pool-positions?key=%s", strings.ToLower(pool.Hex())), &root)
+	err := etherapi.QueryJsonEndpoint(fmt.Sprintf("pool-positions/%s", strings.ToLower(pool.Hex())), &root)
 	payload, err := getPayload(pool, root)
 	if err != nil {
 		return false, err
@@ -737,8 +744,8 @@ func abiToNativeTick(b []byte, start int) int {
 	return convert24BitToInt(extractBigEndianUint24(b, start))
 }
 
-const poolUpdateEndpoint = "pool-update"
-const tokenUpdateEndpoint = "token-update"
+const poolUpdateEndpoint = "pools"
+const tokenUpdateEndpoint = "tokens"
 
 /*
 MODIFIES: tickStateSlot
@@ -750,8 +757,10 @@ func (pcs *PoolComputationState) slotForTickState(
 	pcs.tickStateSlot.SetUint64(tickAsUint)
 	pcs.bc.signExtendBit.SetUint64(7)
 	pcs.tickStateSlot.ExtendSign(pcs.tickStateSlot, pcs.bc.signExtendBit)
+	m := pcs.tickMappingSlot.Bytes32()
+	tickBytes := pcs.tickStateSlot.Bytes32()
 
-	hashResult := crypto.Keccak256Hash(pcs.tickStateSlot.Bytes(), pcs.tickMappingSlot.Bytes())
+	hashResult := crypto.Keccak256Hash(tickBytes[:], m[:])
 	pcs.tickStateSlot.SetBytes(hashResult[:])
 }
 
@@ -1127,6 +1136,75 @@ func (t *TokenState) reportPoolBalance(pool common.Hash, amount *uint256.Int) er
 	return nil
 }
 
+type TokenResult string
+type PoolResult string
+
+type CheckResultSwitch interface {
+	Key() string
+}
+
+func (t TokenResult) Key() string {
+	return "address"
+}
+
+func (p PoolResult) Key() string {
+	return "id"
+}
+
+func getInvariantResult[T CheckResultSwitch](blockNumber big.Int, id string, holds bool, cond map[string]interface{}, others ...map[string]interface{}) map[string]interface{} {
+	var impl T
+	var statusString string
+	if holds {
+		statusString = "success"
+	} else {
+		statusString = "failure"
+	}
+	std := map[string]interface{}{
+		"invariantStatus":      statusString,
+		"blockNumber":          blockNumber.Uint64(),
+		"calculationTimestamp": time.Now().Unix(),
+		"conditionsChecked":    append([]map[string]interface{}{cond}, others...),
+	}
+	std[impl.Key()] = strings.ToLower(id)
+	return std
+}
+
+func getConditionResult(name string, status bool, values ...any) map[string]interface{} {
+	vDict := make(map[string]interface{})
+	var currKey string
+	for i, r := range values {
+		if i%2 == 0 {
+			k, ok := r.(string)
+			if !ok {
+				currKey = fmt.Sprintf("BADKEY!%d", i)
+			} else {
+				currKey = k
+			}
+		} else {
+			switch v := r.(type) {
+			case int:
+				vDict[currKey] = v
+			case string:
+				vDict[currKey] = v
+			case bool:
+				vDict[currKey] = v
+			case uint64:
+				vDict[currKey] = v
+			default:
+				vDict[currKey] = fmt.Sprintf("BADVALUE!%d", i)
+			}
+		}
+	}
+	if len(values)%2 == 1 {
+		vDict[currKey] = "!MISSING"
+	}
+	return map[string]interface{}{
+		"condition": name,
+		"status":    status,
+		"values":    vDict,
+	}
+}
+
 func invariantChecksInner(
 	statedb *state.StateDB,
 	bc etherapi.BlockScanner,
@@ -1273,18 +1351,15 @@ func invariantChecksInner(
 		rawLiq := statedb.GetState(poolManagerAddress, pcs.poolStateSlot.Bytes32())
 		poolLiquidity := pcs.positionLiquidity.SetBytes(rawLiq[:])
 
-		liquidityInvariantHolds := pcs.totalPositionLiquidity.Cmp(poolLiquidity) == 0 && tickError != nil
-		updateMessage := map[string]interface{}{
-			"tickError":       tickError,
-			"invariantResult": liquidityInvariantHolds && tickError != nil,
-			"currentTick":     pcs.currTick,
-			"currBlock":       blockNumber.Uint64(),
-			"activePositions": pcs.activePositions,
-			"totalLiquidity":  pcs.totalPositionLiquidity.Hex(),
-			"poolLiquidity":   poolLiquidity.Hex(),
-		}
+		liquidityInvariantHolds := pcs.totalPositionLiquidity.Cmp(poolLiquidity) == 0 && tickError == nil
+		updateMessage := getInvariantResult[PoolResult](blockNumber, pcs.key.Hex(), liquidityInvariantHolds,
+			getConditionResult(
+				"active liquidity", pcs.totalPositionLiquidity.Eq(poolLiquidity), "activePositions", pcs.activePositions, "currentTick", pcs.currTick, "totalLiquidity", pcs.totalPositionLiquidity.Hex(), "poolLiquidity", poolLiquidity.Hex(),
+			),
+			getConditionResult("tick liquidity", tickError == nil),
+		)
 		poolLogger.Info("Invariant result", "holds", liquidityInvariantHolds, "pool liquidity", pcs.positionLiquidity, "active position liquidity", pcs.totalPositionLiquidity)
-		serverErr := postUpdate(poolUpdateEndpoint, pool.Hex(), updateMessage)
+		serverErr := postUpdate(poolUpdateEndpoint, updateMessage)
 		if serverErr != nil {
 			// logger.Warn("Failed to update web server", "err", serverErr)
 		}
@@ -1354,16 +1429,12 @@ func invariantChecksInner(
 		}
 		invariantHolds := !owed.Gt(actualBalance)
 		tokenLogger.Info(fmt.Sprintf("Invariant check status: %s <= %s %t", owed, actualBalance, invariantHolds))
-		payload := map[string]interface{}{
-			"currBlock":       blockNumber.Uint64(),
-			"invariantResult": invariantHolds,
-			"requiredBalance": owed.Hex(),
-			"actualBalance":   actualBalance.Hex(),
-			"incomplete":      isIncomplete,
-		}
-		serverErr := postUpdate(tokenUpdateEndpoint, token.Hex(), payload)
+		invariantResult := getInvariantResult[TokenResult](blockNumber, token.Hex(), invariantHolds,
+			getConditionResult("solvency", invariantHolds, "requiredBalance", owed.Hex(), "actualBalance", actualBalance.Hex(), "incomplete", isIncomplete),
+		)
+		serverErr := postUpdate(tokenUpdateEndpoint, invariantResult)
 		if serverErr != nil {
-			// logger.Warn("Failed to update server", "err", serverErr)
+			logger.Warn("Failed to update server", "err", serverErr)
 		}
 	}
 	if blockNumber.Uint64()%50 == 0 {
@@ -1372,7 +1443,6 @@ func invariantChecksInner(
 	return nil
 }
 
-func postUpdate(endPointName string, keyHex string, checkResults map[string]interface{}) error {
-	endpoint := fmt.Sprintf("%s?key=%s", endPointName, keyHex)
-	return etherapi.PostUpdate(endpoint, checkResults)
+func postUpdate(endPointName string, checkResults map[string]interface{}) error {
+	return etherapi.PostUpdate(endPointName, checkResults)
 }

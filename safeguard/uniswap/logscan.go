@@ -180,7 +180,7 @@ func processLogs(
 			tickSpacing := convert24BitToInt(extractBigEndianUint24(l.Data, 32+29))
 			hooks := common.BytesToAddress(l.Data[64 : 64+32])
 			lb.onInitialize(poolId, tickSpacing, fee, currency0, currency1, hooks)
-		} else if l.Topics[0] == swapTopic && filt&TRANSFER != 0 {
+		} else if l.Topics[0] == transferTopic && filt&TRANSFER != 0 {
 			if len(l.Topics) != 4 {
 				return fmt.Errorf("Wrong number of topics for transfer event")
 			}
