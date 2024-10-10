@@ -20,14 +20,25 @@ import (
 	"github.com/holiman/uint256"
 )
 
+// What follows is a *lot* of boilerplate to get reasonable looking log messages
+// the default text handler provided by the slog package formats everything as a seuence of `k=v`,
+// the only way I can tell to get something better looking is to implement the handler API ourselves
+// a lot of this is cargo-culted from the slog TestHandler package
+
 type detectorHandler struct {
-	m           *sync.Mutex
-	levelVar    *slog.LevelVar
-	attr        string
+	// mutex to protect writer
+	m *sync.Mutex
+	// level to log at, always points to top level levelVar
+	levelVar *slog.LevelVar
+	// pre-formatted attributes that have been added via WithAttr
+	attr string
+	// pre-formatted group prefix, used to "qualify" added on later. This is never actually used here
 	groupPrefix string
-	writer      io.Writer
+	// output location for the log. Currently just stdout
+	writer io.Writer
 }
 
+// new handler, should really only be called once
 func getHandler(lv *slog.LevelVar) *detectorHandler {
 	return &detectorHandler{
 		m:           &sync.Mutex{},
@@ -43,6 +54,12 @@ func (h *detectorHandler) Enabled(c context.Context, l slog.Level) bool {
 	return l >= s
 }
 
+// Cargo-culted from the TextHandler. The behavior of groups is not
+// well documented: as AFAICT, if you do `s.WithGroup("x").WithAttr("y", whatever)`
+// then the attribute in the output will be `x.y=whatever`, AKA namespacing for
+// attributes.
+// This attempts to implement something faithful to this fuzzy spec,
+// but since we never use groups, I don't claim this is right
 func (h *detectorHandler) WithGroup(s string) slog.Handler {
 	if s == "" {
 		return h
@@ -61,6 +78,11 @@ func (h *detectorHandler) WithGroup(s string) slog.Handler {
 	}
 }
 
+// Adds "attributes" that are always included with the log messages
+// logged on the output. The attributes added this way are included as
+// parentheticals after the main log message and per-message attributes.
+// Also, pool ids are internally trucated, to be 0xabfed...12345 to avoid filling
+// up the screen
 func (h *detectorHandler) WithAttrs(s []slog.Attr) slog.Handler {
 	var b strings.Builder
 	b.WriteString(h.attr)
@@ -98,7 +120,8 @@ const formatString = "[01-02|15:04:05.000]"
 func (h *detectorHandler) Handle(c context.Context, r slog.Record) error {
 	var b strings.Builder
 	level := r.Level.String()
-	// no errors
+	// these write functions return an error, but the Builder API promises
+	// its always null
 	b.WriteString(level)
 	b.WriteByte(' ')
 	var t time.Time
@@ -128,6 +151,7 @@ func (h *detectorHandler) Handle(c context.Context, r slog.Record) error {
 		b.WriteString(a.Value.String())
 		return true
 	})
+	// add the pre-formatted attributes in a parenthetical later in the log message
 	if len(h.attr) != 0 {
 		b.WriteByte(' ')
 		b.WriteByte('(')
@@ -245,31 +269,14 @@ func poolDataOfDict(poolDict map[string]interface{}) (PoolData, error) {
 }
 
 func extractLastBlock(result map[string]interface{}) (uint64, error) {
-	lastBlockRaw, ok := result["lastBlock"]
-	if !ok {
-		return 0, fmt.Errorf("Missing key lastBlock in JSON")
-	}
-	lastBlockFloat, ok := lastBlockRaw.(float64)
-	if !ok {
-		return 0, fmt.Errorf("lastBlock was not a float in the json")
+	lastBlockFloat, err := getKeyAs[float64](result, "lastBlock", nil)
+	if err != nil {
+		return 0, nil
 	}
 	return uint64(lastBlockFloat), nil
 }
 
 func getPayload(context fmt.Stringer, result map[string]interface{}) (interface{}, error) {
-	// TODO(jtoman): either add this done flag back in or remove this
-	/*doneRaw, exists := result["done"]
-	if !exists {
-		return nil, fmt.Errorf("No done status for %s", context)
-	}
-	doneBool, ok := doneRaw.(bool)
-	if !ok {
-		return nil, fmt.Errorf("done key was not a boolean")
-	}
-	if !doneBool {
-		// nothing to do yet
-		return nil, nil
-	}*/
 	payloadRaw, exists := result["payload"]
 	if !exists {
 		return nil, fmt.Errorf("No payload for done result for %s", context)
@@ -286,7 +293,7 @@ POST:
     current block. These pools are marked ready.
     b. Further, these pools were NOT registered prior to syncing (they were discovered during block scanning).
     c. Further, each pool id in this list is guaranteed to appear in the token data's poolTokens.
-    d. The (p,c1) pairs in the token's tokenPools satisfy invariant 7 of getMonitoredPools
+    d. The (p,c1) pairs in the token's tokenPools satisfy invariant 7 of getMonitoredPools below
 */
 func (st *InvariantState) loadTokenPools(tokenAddress common.Address, bc etherapi.BlockScanner, currBlock uint64) ([]common.Hash, error) {
 	result := make(map[string]interface{})
@@ -338,8 +345,7 @@ func (st *InvariantState) loadTokenPools(tokenAddress common.Address, bc etherap
 	if err != nil {
 		return nil, err
 	}
-	/* disabled while waiting for this to implemented
-	err = etherapi.QueryJsonEndpoint(fmt.Sprintf("token-transfers?token=%s", strings.ToLower(tokenAddress.Hex())), &result)
+	err = etherapi.QueryJsonEndpoint(fmt.Sprintf("token-transfers/%s", strings.ToLower(tokenAddress.Hex())), &result)
 	if err != nil {
 		return nil, fmt.Errorf("Could not fetch token transfer info %s", err)
 	}
@@ -366,9 +372,8 @@ func (st *InvariantState) loadTokenPools(tokenAddress common.Address, bc etherap
 	lastTransferBlock, err := extractLastBlock(result)
 	if err != nil {
 		return nil, err
-	}*/
-	// untilBlock := min(lastTransferBlock, lastPoolBlock)
-	untilBlock := lastPoolBlock
+	}
+	untilBlock := min(lastTransferBlock, lastPoolBlock)
 
 	extractor := &poolInitScan{
 		tokenAddress: tokenAddress,
@@ -376,15 +381,9 @@ func (st *InvariantState) loadTokenPools(tokenAddress common.Address, bc etherap
 		newPools:     make(map[common.Hash]bool),
 		tokenState:   tokenState,
 	}
-	// FIXME: the server should never be telling us last block 0, but it is
-	// for the time being, just don't scan blocks in this case
-	if lastPoolBlock != 0 {
-		err = bc.ScanBlocks(untilBlock, true, func(l []*types.Log) error {
-			return processLogs(l, extractor, MODIFY|INITIALIZE|TRANSFER)
-		})
-	} else {
-		err = nil
-	}
+	err = bc.ScanBlocks(untilBlock, true, func(l []*types.Log) error {
+		return processLogs(l, extractor, MODIFY|INITIALIZE|TRANSFER)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -433,7 +432,7 @@ func Fatal(s string) FatalError {
 
 /*
 POST STATE INVARIANTS:
- 1. All pool keys that appear in the first list exist in the invariant state PoolIdToInfo
+ 1. All pool keys that appear in the first list of the return value exist in the invariant state PoolIdToInfo
  2. All such pool keys are marked as "ready"
  3. All pool keys that appear in the second list have at least one entry in the first list (and thus are also ready)
  4. All pool keys in the second list were not ready before this call (because they were not loaded or not known about)
@@ -947,6 +946,7 @@ func (pos *PositionComputationState) processPosition(
 	netUpper.Sub(netUpper, pcs.positionLiquidity)
 
 	positionLogger.Debug("> start fee computation")
+	// the actual price computations, see https://www.notion.so/certora/Uniswap-v4-Invariants-103fe5c14fd380f19e44cbd74c1c514c
 	if poolState.monitor0 {
 		positionLogger.Debug(">> Start token balance computation", "token", poolState.currency0)
 		scratchUint := pos.computeFees(statedb, true)
@@ -991,7 +991,7 @@ func (pos *PositionComputationState) processPosition(
 		tickUpperPrice := pcs.bc.getSqrtRatioAtTick(tickRange.tickUpper)
 
 		positionLogger.Debug(">> Price parameters",
-			"token", poolState.currency0,
+			"token", poolState.currency1,
 			"tickLowerPrice", tickLowerPrice,
 			"tickUpperPrice", tickUpperPrice,
 			"sqrtPriceX96", pcs.sqrtPriceX96,
@@ -1387,6 +1387,10 @@ func invariantChecksInner(
 				break
 			}
 		}
+		// this contains the running sum of all the pool balances involved,
+		// which is updated incrementally as the pools involved are changed.
+		// the other computations here are not worth (imo) incrementalizing, so we
+		// do them de novo on each block
 		owed.Set(tokenState.poolBalanceOwed)
 
 		// protocol fees
