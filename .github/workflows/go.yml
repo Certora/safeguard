@@ -1,15 +1,15 @@
-name: i386 linux tests
+name: Go tests
 
 on:
   push:
-    branches: [ master ]
+    branches: [ safeguard ]
   pull_request:
-    branches: [ master ]
+    branches: [ safeguard ]
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Set up Go
