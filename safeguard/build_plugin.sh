@@ -58,6 +58,12 @@ elif [ $SAFEGUARD_MODE = "SOCKET" ]; then
         exit 1
     fi
     echo "{\"type\":\"RELOAD\",\"data\":\"$PLUGIN_OBJ\"}" | socat - UNIX-CONNECT:$SAFEGUARD_SOCKET_PATH
+elif [ $SAFEGUARD_MODE = "NET" ]; then
+    SOCK=6969
+    if [ $SAFEGUARD_ADMIN_PORT ]; then
+        SOCK=$SAFEGUARD_ADMIN_PORT
+    fi
+    echo "{\"type\":\"RELOAD\",\"data\":\"$PLUGIN_OBJ\"}" | netcat -N localhost $SOCK
 else
     echo "Not trying to reload"
 fi

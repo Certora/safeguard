@@ -88,14 +88,21 @@ func sendUpdateToEndpoint(
 		}
 		payload[k] = v
 	}
+
 	payload["client_id"] = nodeId
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("failed to marshal payload: %w", err)
 	}
 
+	r, err := http.NewRequest("POST", endpointURL, strings.NewReader(string(payloadBytes)))
+	if err != nil {
+		return err
+	}
+	r.Header.Add("X-Correlation-Id", nodeId)
+
 	// Post the request
-	resp, err := http.Post(endpointURL, "application/x-www-form-urlencoded", strings.NewReader(string(payloadBytes)))
+	resp, err := http.DefaultClient.Do(r)
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
