@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 20px;
+        }
+        .dashboard {
+            max-width: 80%;
+            margin: auto;
+            padding: 20px;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        .section {
+            margin-bottom: 20px;
+            padding: 20px;
+            background: #fafafa;
+            border-radius: 8px;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);
+        }
+        .section .status {
+            font-size: 1.5em;
+            margin-bottom: 20px;
+        }
+        .section .status.invariant-holds {
+            color: green;
+        }
+        .section .status.invariant-violated {
+            color: red;
+        }
+
+        div.info-header {
+            display: inline-block;
+            margin-left: 1em;
+            margin-right: 1em;
+        }
+        div.section div.global-health {
+            display: none;
+        }
+        div.section.loaded div.global-health {
+            display: unset;
+        }
+
+        .info {
+            margin-bottom: 15px;
+        }
+        .info label {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .info span {
+            font-size: 0.7em;
+        }
+        div.info-header-holder .info span {
+            font-size: 1em;
+        }
+
+        #status-container {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-evenly;
+        }
+
+        .status-container div.info {
+            display: none;
+        }
+        .status-container.loaded div.info {
+            display: block;
+        }
+        .input-group {
+            margin-bottom: 20px;
+        }
+        .input-group input {
+            padding: 10px;
+            font-size: 1em;
+            width: calc(100% - 120px);
+        }
+        .input-group button {
+            padding: 10px;
+            font-size: 1em;
+        }
+        .error-message {
+            color: red;
+            font-weight: bold;
+            margin-bottom: 20px;
+        }
+        
+        div.section-template.loaded div.status-message {
+            display: none;
+        }
+
+        div.error-message.show + div.status-message {
+            display: none;
+        }
+
+
+        div.error-message {
+            display: none;
+        }
+
+        div.error-message.show {
+            display: unset;
+        }
+
+        div.invariant-holder {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-evenly;
+        }
+
+        div.info-header-holder {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-evenly;
+        }
+
+        div.invariant-results {
+            background: linear-gradient(#fff,#fff) padding-box,linear-gradient(to bottom right,#79f2a5,#40dcff) border-box;
+            border: 2px solid transparent;
+            border-radius: 8px;
+            padding: 1em;
+        }
+
+        div.invariant-results span.status {
+            font-size: 0.9em;
+        }
+
+        div.invariant-results h3 {
+            margin-top: 0.4em;
+            margin-bottom: 0.4em;
+        }
+
+        hr {
+            margin-bottom: 1em;
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard error-container">
+        <div id="global-error" class="error-message"></div>
+        <div id="status-container"></div>
+    </div>
+
+    <template id="detail-template">
+        <div class="info">
+            <label class="detail-name">-</label><br>
+            <span class="detail-value">-</span>
+        </div>
+    </template>
+
+    <template id="condition-template">
+        <div class="invariant-results">
+            <h3 class="condition-name">-</h3>
+            <span class="status">
+                -
+            </span>
+            <hr>
+        </div>
+    </template>
+
+    <template id="section-template">
+        <div class="section error-container">
+            <h2>Monitoring <span class="monitoring-target"></span></h2>
+            <div class="error-message"></div>
+            <div class="status-message"></div>
+            <div class="info-header-holder">
+                <div class="info-header info">
+                    <label>Overall health</label>
+                    <span class="status">
+                        -
+                    </span>
+                </div>    
+                <div class="info-header info">
+                    <label>Most recent block number</label>
+                    <span class="blockNum">-</span>
+                </div>
+                <div class="info-header info">
+                    <label>Last update</label>
+                    <span class="ts">-</span>
+                </div>
+            </div>
+            <hr>
+            <div class="invariant-holder">
+                
+            </div>
+        </div>
+    </template>
+
+    <script>
+        function showError(message, section) {
+            const errorMessageElement = section.closest(".error-container").querySelector(".error-message")
+            errorMessageElement.textContent = message;
+            errorMessageElement.classList.add("show")
+        }
+
+        function clearError(section) {
+            const errorMessageElement = section.closest(".error-container").querySelector(".error-message")
+            errorMessageElement.classList.remove("show")
+        }
+
+        async function fetchTargets() {
+            try {
+                fetch('http://127.0.0.1:5000/targets').then((response) => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    response.json().then((ids) => {
+                        ids.forEach((idObj) => {
+                            fetchStatus(idObj.id, idObj.name);
+                        });
+                    })
+                })
+            } catch (error) {
+                console.error('Error fetching targets:', error);
+                showError('Failed to load targets. Please try again later.', document.getElementById("global-error"));
+            }
+        }
+
+        function fetchStatus(id, name) {
+            try {
+                fetch(`http://127.0.0.1:5000/status/${encodeURIComponent(id)}`).then((response) => {
+                    if(!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    response.json().then((data) => {
+                        updateSection(id, name, data);
+                    })
+                })
+            } catch (error) {
+                console.error(`Error fetching status for address ${address}:`, error);
+                showError(`Failed to load status for address ${address}. Please try again later.`, section);
+            }
+        }
+
+        function initializeSection(id, name) {
+            const template = document.getElementById("section-template");
+            const clone = document.importNode(template.content, true);
+            clone.querySelector('div.section').id = `section-${id}`;
+            // TODO(jtoman): let this be pretty printed
+            clone.querySelector(".monitoring-target").textContent = name;
+            document.getElementById("status-container").appendChild(clone);
+            return document.getElementById(`section-${id}`);
+        }
+
+        function setStatus(statusSpan, isBad, goodString, badString) {
+            statusSpan.classList.remove("invariant-violated");
+            statusSpan.classList.remove("invariant-holds");
+            if(isBad) {
+                statusSpan.textContent = badString;
+                statusSpan.classList.add("invariant-violated");
+            } else {
+                statusSpan.textContent = goodString;
+                statusSpan.classList.add("invariant-holds");
+            }
+        }
+
+        function getOrInitializeCondition(section, id, cond) {
+            const expectedId = `invariant-${id}-${cond.id}`;
+            var condNode = document.getElementById(expectedId);
+            if(!condNode) {
+                const templ = document.getElementById("condition-template");
+                condNode = document.importNode(templ.content, true);
+                condNode.querySelector('div.invariant-results').id = expectedId;
+                condNode.querySelector("h3.condition-name").textContent = cond.name;
+                section.appendChild(condNode);
+                condNode = document.getElementById(expectedId);
+            }
+            return condNode;
+        }
+
+        function getOrInitializeDetail(holder, monitorId, condId, detail) {
+            const id = `detail-${monitorId}-${condId}-${detail.id}`;
+            var detailNode = document.getElementById(id);
+            if(!detailNode) {
+                const templ = document.getElementById("detail-template");
+                detailNode = document.importNode(templ.content, true);
+                detailNode.querySelector("div.info").id = id;
+                detailNode.querySelector("label.detail-name").textContent = detail.name;
+                holder.appendChild(detailNode);
+                detailNode = document.getElementById(id);
+            }
+            return detailNode;
+        }
+
+        function updateSection(id, name, data) {
+            var section = document.getElementById(`section-${id}`);
+            if (!section) {
+                section = initializeSection(id, name)
+            }
+            const statusElement = document.getElementById(`status-${id}`)
+            if(data.status == "error") {
+                showError(data.message, section)
+                return
+            }
+            clearError(section);
+            if(data.message) {
+                statusElement.textContent = data.message
+                section.classList.remove("loaded")
+                return
+            }
+            section.querySelector('.blockNum').textContent = data.blockNumber;
+            section.querySelector('.ts').textContent = new Date(data.time * 1000).toLocaleString();
+            const globalStatus = section.querySelector('div.info-header span.status');
+            setStatus(globalStatus, data.status == "violated", "Good", "Problem");
+            const invariantHolder = section.querySelector('div.invariant-holder');
+            const seenConditions = {};
+            data.info.forEach((i) => {
+                const cond = getOrInitializeCondition(invariantHolder, id, i);
+                seenConditions[cond.id] = true;
+                setStatus(cond.querySelector(".status"), !i.status, "Invariant Holds", "Violated");
+                const seenDetails = {}
+                i.details.forEach((d) => {
+                    const detail = getOrInitializeDetail(cond, id, i.id, d);
+                    seenDetails[detail.id] = true;
+                    detail.querySelector('.detail-value').textContent = d.display;
+                });
+                const presentDetails = cond.querySelectorAll('div.info');
+                presentDetails.forEach((p) => {
+                    if(p.id in seenDetails) {
+                        return;
+                    }
+                    p.remove();
+                })
+            });
+            const presentInvariants = invariantHolder.querySelectorAll('div.invariant-results');
+            presentInvariants.forEach((p) => {
+                if(p.id in seenConditions) {
+                    return;
+                }
+                p.remove();
+            });
+            section.classList.add("loaded");
+        }
+
+        async function monitorAddress() {
+            const button = document.getElementById('addressInput');
+            const address = document.getElementById('addressInput').value.trim();
+            if (!address) {
+                showError('Please enter an address', button);
+                return;
+            }
+            try {
+                const response = await fetch(`http://127.0.0.1:5000/monitor?address=${encodeURIComponent(address)}`, { method: 'POST' });
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                // Refresh the targets after adding a new address
+                fetchTargets();
+                clearError(button);
+            } catch (error) {
+                console.error('Error monitoring address:', error);
+                showError('Failed to add address. Please try again later.', button);
+            }
+        }
+
+        // Fetch the list of monitored addresses when the page loads
+        fetchTargets();
+        // Poll each address for updates every 10 seconds
+        setInterval(() => {
+            fetchTargets();
+        }, 10000);
+    </script>
+</body>
+</html>

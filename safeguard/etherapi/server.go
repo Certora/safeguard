@@ -100,6 +100,7 @@ func sendUpdateToEndpoint(
 		return err
 	}
 	r.Header.Add("X-Correlation-Id", nodeId)
+	r.Header.Set("Content-Type", "application/json")
 
 	// Post the request
 	resp, err := http.DefaultClient.Do(r)

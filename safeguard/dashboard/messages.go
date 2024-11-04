@@ -101,7 +101,7 @@ func GetDashboardMessage(blockNumber big.Int, id string, holds bool, cond map[st
 func GetDashboardErrorMessageGen[T KeySelector, ID fmt.Stringer](blockNumber big.Int, id ID, err error) map[string]interface{} {
 	std := map[string]interface{}{
 		"invariantStatus":      "error",
-		"blockblockNumber":     blockNumber.Uint64(),
+		"blockNumber":          blockNumber.Uint64(),
 		"calculationTimestamp": time.Now().Unix(),
 		"error":                err.Error(),
 	}

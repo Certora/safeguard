@@ -25,13 +25,10 @@ var reserveDataPointer = new(uint256.Int)
 var totalSupplySelector = common.FromHex("0x18160ddd")
 
 var atokenAddressOffset = uint64(4)
-var stableDebtTokenOffset = uint64(5)
 var variableDebtTokenOffset = uint64(6)
 
 var aTokenTotalSupply = new(uint256.Int)
 var variableDebtTotalSupply = new(uint256.Int)
-var stableDebtTotalSupply = new(uint256.Int)
-var totalDebt = new(uint256.Int)
 
 func readAddressFromStorage(statedb *state.StateDB, where *uint256.Int) common.Address {
 	addressRaw := statedb.GetState(aavePoolAddress, where.Bytes32())
@@ -45,7 +42,7 @@ func runTotalSupplyGetter(mr *etherapi.MockRunner, target common.Address, res *u
 		return fmt.Errorf("Total supply call reverted or failed %s", err)
 	}
 	if len(ret) != 32 {
-		return fmt.Errorf("Unexpected buffer return size %d for totalSupply()", len(ret))
+		return fmt.Errorf("Unexpected buffer return size %d for totalSupply() on %s", len(ret), target)
 	}
 	res.SetBytes(ret[0:32])
 	return nil
@@ -59,7 +56,7 @@ func postErrorUpdate(bn big.Int, which common.Address, err error) {
 }
 
 func invariantChecks(blockNumber big.Int, statedb *state.StateDB, mr *etherapi.MockRunner) error {
-	numReservesRaw := statedb.GetState(aavePoolAddress, common.Hash(reserveDataSlot))
+	numReservesRaw := statedb.GetState(aavePoolAddress, common.Hash(reservesCountSlot))
 	numReserves := new(uint256.Int)
 	numReserves.SetBytes(numReservesRaw[:])
 	numReserves.Rsh(numReserves, 64)
@@ -83,18 +80,11 @@ func invariantChecks(blockNumber big.Int, statedb *state.StateDB, mr *etherapi.M
 		reserveDataPointer.AddUint64(reserveDataPointer, uint64(atokenAddressOffset))
 
 		atokenAddress := readAddressFromStorage(statedb, reserveDataPointer)
-		// one hopes go optimizes this out
-		if atokenAddressOffset >= stableDebtTokenOffset {
-			panic("Invariant absolutely broken")
-		}
-		reserveDataPointer.AddUint64(reserveDataPointer, stableDebtTokenOffset-atokenAddressOffset)
-		stableDebtTokenAddress := readAddressFromStorage(statedb, reserveDataPointer)
-
-		if stableDebtTokenOffset >= variableDebtTokenOffset {
+		if atokenAddressOffset >= variableDebtTokenOffset {
 			panic("Invariant absolutely broken")
 		}
 
-		reserveDataPointer.AddUint64(reserveDataPointer, variableDebtTokenOffset-stableDebtTokenOffset)
+		reserveDataPointer.AddUint64(reserveDataPointer, variableDebtTokenOffset-atokenAddressOffset)
 		variableDebtTokenAddress := readAddressFromStorage(statedb, reserveDataPointer)
 
 		err := runTotalSupplyGetter(mr, atokenAddress, aTokenTotalSupply)
@@ -109,19 +99,10 @@ func invariantChecks(blockNumber big.Int, statedb *state.StateDB, mr *etherapi.M
 			continue
 		}
 
-		err = runTotalSupplyGetter(mr, stableDebtTokenAddress, stableDebtTotalSupply)
-		if err != nil {
-			postErrorUpdate(blockNumber, reserveAddress, err)
-			continue
-		}
-
-		totalDebt.Add(variableDebtTotalSupply, stableDebtTotalSupply)
-		violated := aTokenTotalSupply.Lt(totalDebt)
+		violated := aTokenTotalSupply.Lt(variableDebtTotalSupply)
 		cond := dashboard.GetConditionResult("totalSupplyGteTotalDebt", !violated,
 			"atokenSupply", aTokenTotalSupply,
-			"stableDebtSupply", stableDebtTotalSupply,
-			"variableDebtSupply", variableDebtTokenAddress,
-			"totalDebt", totalDebt,
+			"variableDebtSupply", variableDebtTotalSupply,
 		)
 		etherapi.PostUpdate("update", dashboard.GetDashboardMessageGen[dashboard.PlainId, dashboard.NormalizedAddress](
 			blockNumber, dashboard.NormalizedAddress(reserveAddress), !violated, cond,
