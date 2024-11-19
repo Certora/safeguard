@@ -5,19 +5,42 @@ from flask import abort as wrapped_abort
 from enum import Enum
 from dataclasses import dataclass
 
+"""
+This module contains some common code for building a dashboard for invariant monitoring.
+
+This can be used for a production dashboard, but is primarily meant for debugging.
+
+The core piece is DashboardApp, which can be extended to receive update messages posted by the
+safeguard node and serve status results to the dashboard page (the html for which is included here).
+"""
+
 class DetailValueFormatter(ABC):
+    """
+    Basic class used to format the values in a condition detail.
+    """
     @abstractmethod
     def format(self, key: str, value: Any) -> str:
+        """
+        Given a key and value, return a pretty-printed representation of the value.
+        """
         pass
 
 @dataclass
 class ConditionDetail:
+    """
+    Describes a detail in a condition. id is the key in the details dictionary, display_name is the human readable name of detail,
+    and fmt is either a DetailValueFormatter, or a format string (using %s etc.)
+    """
     id: str
     display_name: str
     fmt: Union[str, DetailValueFormatter]
 
 @dataclass
 class ConditionSpec:
+    """
+    Describes one of the conditions checked as part of an overall invariant. display_name is the human readable desciption of the condition,
+    and details is a list of ConditionDetail objects which describe how to format the details of the condition.
+    """
     display_name: str
     details: List[ConditionDetail]
 
@@ -28,7 +51,6 @@ class Status(Enum):
     OK = 4
 
 def abort(s, msg):
-    print(f"Aborting with {s} because {msg}")
     wrapped_abort(s, msg)
 
 class InvariantStatus(object):
@@ -131,7 +153,10 @@ class HexToDecimalFormatter(DetailValueFormatter):
             value = value[2:]
         decimal = int(value, 16)
         return f"{decimal:,}"
-    
+
+"""
+Helper object to format a hexadecimal string into a decimal string representation with digit separators.
+"""
 HexToDecimal = HexToDecimalFormatter()
     
 class IntToDecimalFormatter(DetailValueFormatter):
@@ -141,22 +166,57 @@ class IntToDecimalFormatter(DetailValueFormatter):
         return f"{value:,}"
         
 
+"""
+Helper object to for a json number into a decimal string with digit separators
+"""
 IntToDecimal = IntToDecimalFormatter()
 
 class DashboardApp:
+    """
+    Basic class for building a dashboard. Associates unique ids to the status of the invariant
+    result for that id. The actual ID chosen can be anything. We will call the "thing" associated
+    with an id (the thing being monitored) the "monitor target."
+
+    The status of monitor targets are communicated with invariant status messages, the format of these
+    messages is described in Message.md
+    """
+
     def on_violation(self, id: str, violation: Dict[str, Any]):
+        """
+        Called on the first violation observed for a "monitor target". More precisely, if the status of a monitor
+        goes from any that is not VIOLATED to VIOLATED, this function is called. Thus, if a monitor results
+        goes from good -> bad -> good -> bad this function will be called twice.
+
+        id is the id of the monitor target, and violate is the raw payload sent by the server.
+        """
         pass
 
     def format_id(self, id: str) -> str:
+        """
+        Formats the monitor target's ID into something more descriptive (e.g., pool address to pool name). By
+        default uses the monitor target's id.
+        """
         return id
 
     def __init__(self, id_key: str, fmt_instructions: Dict[str, ConditionSpec]):
+        """
+        id_key is the key in the top-level envelope holds the monitor target's id
+        fmt_instructions maps the condition ids that appear in the invariant envelope's condition
+        to the instructions on how to format the condition using the ConditionSpec
+        """
         self.formatters = fmt_instructions
         self.state = {} #type:Dict[str,InvariantStatus]
         self.register_order = [] #type:List[Dict[str,str]]
         self.id_key = id_key
 
     def route(self, app: Flask):
+        """
+        Sets up three end points on app.
+        `/update`, which receives POST requests holding the invariant status messages and updates this dashboards internal state;
+        `/targets` which receives GET requests and returns a list of all monitor target ids for which this dashboard has data
+        `/status/<string:id>` which receives a GET request whith the URL parameter id, and returns the status of the invariant in a format
+        to be rendered on dashboard.html
+        """
         @app.route("/update", methods=["POST"])
         def update():
             if not request.is_json:
