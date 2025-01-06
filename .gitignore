@@ -50,3 +50,10 @@ profile.cov
 logs/
 
 tests/spec-tests/
+
+**/.*.go
+
+server/ethscan_cache/*
+target/*
+
+safeguard/plugin_build/*

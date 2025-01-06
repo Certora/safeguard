@@ -17,17 +17,20 @@
 package core
 
 import (
+	"container/list"
 	"errors"
 	"fmt"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/misc"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/safeguard/etherapi"
 )
 
 // StateProcessor is a basic Processor, which takes care of transitioning
@@ -47,6 +50,53 @@ func NewStateProcessor(config *params.ChainConfig, chain *HeaderChain) *StatePro
 	}
 }
 
+// Implementation required by the BlockScan interface
+func (bc *BlockChain) ScanBlocks(lastJsonBlock uint64, ordered bool, cb func([]*types.Log) error) error {
+	currHead := bc.CurrentBlock()
+	currBlockNum := currHead.Number.Uint64()
+	if currBlockNum > lastJsonBlock {
+		logList := list.New()
+		headerIt := currHead
+		blockNum := currHead.Number.Uint64()
+		scannedBlocks := 0
+		processLogs := func(ls [][]*types.Log) error {
+			for _, txL := range ls {
+				if err := cb(txL); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		// traverse backwards, either pushing onto the front of the output list (if ordered = true)
+		// or delivering immediately to cb
+		for blockNum > lastJsonBlock {
+			currNum := blockNum
+			ls := rawdb.ReadLogs(bc.db, headerIt.Hash(), currNum)
+			if ordered {
+				logList.PushFront(ls)
+			} else {
+				err := processLogs(ls)
+				if err != nil {
+					return err
+				}
+			}
+			headerIt = bc.GetHeaderByHash(headerIt.ParentHash)
+			blockNum = headerIt.Number.Uint64()
+			scannedBlocks++
+		}
+		if ordered {
+			for p := logList.Front(); p != nil; p = p.Next() {
+				ls := p.Value.([][]*types.Log)
+				err := processLogs(ls)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // Process processes the state changes according to the Ethereum rules by running
 // the transaction messages using the statedb and applying any rewards to both
 // the processor (coinbase) and any included uncles.
@@ -54,7 +104,7 @@ func NewStateProcessor(config *params.ChainConfig, chain *HeaderChain) *StatePro
 // Process returns the receipts and logs accumulated during the process and
 // returns the amount of gas that was used in the process. If any of the
 // transactions failed to execute due to insufficient gas it will return an error.
-func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config) (types.Receipts, []*types.Log, uint64, error) {
+func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config, bc *BlockChain) (types.Receipts, []*types.Log, uint64, error) {
 	var (
 		receipts    types.Receipts
 		usedGas     = new(uint64)
@@ -100,7 +150,25 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
 	p.chain.engine.Finalize(p.chain, header, statedb, block.Body())
-
+	// this is where safeguard runs
+	if bc != nil {
+		func() {
+			safeguardImpl.lock.Lock()
+			defer safeguardImpl.lock.Unlock()
+			if !safeguardImpl.enabled {
+				return
+			}
+			mr := etherapi.NewMockRunner(
+				statedb,
+				block.GasLimit(),
+				vmenv,
+			)
+			err := safeguardImpl.impl.InvariantChecks(statedb, bc, *blockNumber, mr, allLogs)
+			if err != nil {
+				fmt.Printf("Safeguard checking failed with error: %s\n", err)
+			}
+		}()
+	}
 	return receipts, allLogs, *usedGas, nil
 }
 
