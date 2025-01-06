@@ -42,6 +42,7 @@ spec = {
 }
 
 ETHERSCAN_API_URL = "https://api.etherscan.io/api"
+ETHERSCAN_API_KEY = os.getenv("ETHERSCAN_API_KEY", "")
 
 def filter_rate_limited(r) -> bool:
     try:
@@ -90,7 +91,7 @@ class AaveDashboard(dashboard_app.DashboardApp):
             "action": "eth_call",
             "to": to,
             "data": selector,
-            "apikey": "QUJKPW4SZVVVBTXZJQHBJJB4UBB3KYP1W9"
+            "apikey": ETHERSCAN_API_KEY
         }
 
     def format_id(self, id: str) -> str:
