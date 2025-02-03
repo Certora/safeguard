@@ -154,7 +154,7 @@ to the client the string `{"success": true}`. If the message was rejected for an
 
 ## Runtime Environment Variables
 
-- `CERT_HTTP_API_URL` - HTTPS endpoint for the Python server (example: `https://676im49e3m.execute-api.us-west-2.amazonaws.com/prod/`). If not configured, defaults to `localhost:5000`
+- `CERT_HTTP_API_URL` - HTTPS endpoint for a dashboard server (example: `https://my-monitoring-app.us-west-2.amazonaws.com/prod/`). If not configured, defaults to `localhost:5000`
 - `CERT_CLIENT_ID` - string ID that should be included either in the `X-Correlation-ID` header or inside the message body while communicating with the server. 
 - `SAFEGUARD_MODE` - controls the administration mode used for safeguard, and loading strategy
 - `SAFEGUARD_LOAD_INITIAL` - If set, dynamic admin strategies will immediately load the plugin
@@ -166,3 +166,4 @@ to the client the string `{"success": true}`. If the message was rejected for an
 
 - `GO_BIN` - if set, used to override the compiler used to build a plugin
 - `SAFEGUARD_OBJ_PATH` - if set, used to specify the full path for the output of the plugin compilation
+- `SAFEGUARD_MODCACHE` - if set, sets the `GOMODCACHE` used when building the plugin to be this folder

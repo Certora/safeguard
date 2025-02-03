@@ -45,7 +45,6 @@ func (bc *BlockComputationState) getSqrtRatioAtTick(tick int) *uint256.Int {
 }
 
 var levelVar slog.LevelVar
-
 var logger = slog.New(logging.GetHandler(&levelVar))
 
 type storageOffsetsT struct {
@@ -571,7 +570,6 @@ func (st *InvariantState) AddPosition(
 	pool.AddPosition(position, tickLower, tickUpper)
 }
 
-// chat gpt wrote this, I hope it's right!
 func convert24BitToInt(value uint64) int {
 	// Mask to get only the lowest 24 bits
 	const mask uint64 = 0xFFFFFF
@@ -798,7 +796,6 @@ func (pos *PositionComputationState) processPosition(
 	netUpper.Sub(netUpper, pcs.positionLiquidity)
 
 	positionLogger.Debug("> start fee computation")
-	// the actual price computations, see https://www.notion.so/certora/Uniswap-v4-Invariants-103fe5c14fd380f19e44cbd74c1c514c
 	if poolState.monitor0 {
 		positionLogger.Debug(">> Start token balance computation", "token", poolState.currency0)
 		scratchUint := pos.computeFees(statedb, true)
