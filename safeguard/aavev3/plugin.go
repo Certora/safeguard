@@ -28,6 +28,7 @@ func (a AaveDetector) OnDispose() {
 }
 
 func (a AaveDetector) SetLogLevel(l slog.Level) {
+	levelVar.Set(l)
 }
 
 var Detector AaveDetector

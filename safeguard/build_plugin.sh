@@ -33,7 +33,7 @@ head_hash=$(git rev-parse HEAD)
 commit_date=$(git show -s --format=%ci "$head_hash" | cut -d ' ' -f 1 | sed 's/-//g')
 
 extra_link=
-if [ $(uname -s) = "Linux" ]; then
+if [ "$(uname -s)" = "Linux" ]; then
 	extra_link="-extldflags '-Wl,-z,stack-size=0x800000'"
 fi
 
@@ -75,7 +75,7 @@ elif [ "$SAFEGUARD_MODE" = "NET" ]; then
     if [ $SAFEGUARD_ADMIN_PORT ]; then
         SOCK=$SAFEGUARD_ADMIN_PORT
     fi
-    echo "{\"type\":\"RELOAD\",\"data\":\"$PLUGIN_OBJ\"}" | netcat -N localhost $SOCK
+    echo "{\"type\":\"RELOAD\",\"data\":\"$PLUGIN_OBJ\"}" | nc -N localhost $SOCK
 else
     echo "Not trying to reload"
 fi

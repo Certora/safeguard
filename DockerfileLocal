@@ -1,12 +1,4 @@
 FROM golang:1.22-bullseye AS builder
-
-# Choose which plugin to use
-ARG PLUGIN_NAME
-RUN if [ -z "$PLUGIN_NAME" ]; then \
-        echo "ERROR: The plugin name is required but not provided."; \
-        exit 1; \
-    fi
-
 COPY go.mod /go-ethereum/
 COPY go.sum /go-ethereum/
 RUN cd /go-ethereum && go mod download
@@ -14,7 +6,7 @@ RUN cd /go-ethereum && go mod download
 ADD . /go-ethereum
 RUN cd /go-ethereum/safeguard && \
 	export SAFEGUARD_OBJ_PATH=$(pwd)/safeguard.so && \
-    ./build_plugin.sh $PLUGIN_NAME && \
+    ./build_plugin.sh aavev3 && \
     cd /go-ethereum && \
     go run build/ci.go install ./cmd/geth
 
@@ -28,9 +20,9 @@ ENV SAFEGUARD_PLUGIN_PATH=/usr/local/bin/safeguard.so \
     SAFEGUARD_LOAD_INITIAL=1 \
     SAFEGUARD_MODE=STATIC
 
-EXPOSE 8545 8546 30303 30303/udp
+EXPOSE 8545 8546 30303 30303/udp 8551 5000
 
-ENTRYPOINT ["geth"]
+ENTRYPOINT ["geth","--pprof","--authrpc.vhosts=*","--authrpc.addr=0.0.0.0", "--http.vhosts=*", "--http", "--http.api=admin,eth,web3,txpool,net,debug,engine", "--http.addr=0.0.0.0", "--mainnet", "--datadir", "/Volumes/TRANSCEND/ethereum/execution"]
 
 # Build dashboard
 FROM python:3.11-slim AS dashboard
@@ -40,6 +32,7 @@ ADD ./dashboard /home/dashboard
 
 # Install python dependencies
 RUN pip install flask_cors slack_sdk requests
+
 
 EXPOSE 5000
 

@@ -5,6 +5,57 @@ from flask import abort as wrapped_abort
 from enum import Enum
 from dataclasses import dataclass
 
+import os
+from typing import Optional
+import time
+from datetime import datetime, timedelta
+
+from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
+
+
+class Slack:
+    '''
+    Description
+    -----------
+    This class is used to send messages with runs summaries to a Slack channel.
+    '''
+    def __init__(self, channel: str = '#aave-alert-test', slack_token: Optional[str] = None):
+        '''
+        Summary
+        -------
+        Initializes a new instance of the Slack class.
+
+        Parameters
+        ----------
+        channel : str, default = '#aave-alert-test'
+            The name of the Slack channel to send messages to.
+        slack_token : Optional[str], default = None
+            The Slack API token to use for authentication. If not provided, it will be loaded from the 'SLACK_TOKEN' environment variable.
+        '''
+        if not slack_token:
+            slack_token = os.environ.get('SLACK_TOKEN')
+        
+        self.client = WebClient(token=slack_token)
+        self.channel = channel
+
+    def send_message(self, message: str):
+        '''
+        Summary
+        -------
+        Sends a message to the Slack channel.
+
+        Parameters
+        ----------
+        message : str
+            The message to send.
+        '''
+        try:
+            self.client.chat_postMessage(channel=self.channel, text=message)
+            print(f'Message sent: {message}')
+        except SlackApiError as e:
+            print(f'Error sending message: {e}')
+
 """
 This module contains some common code for building a dashboard for invariant monitoring.
 
@@ -147,11 +198,20 @@ class InvariantStatus(object):
 
 class HexToDecimalFormatter(DetailValueFormatter):
     def format(self, key, value) -> str:
+        print(f"key: {key}, value: {value}")
         if type(value) != str:
             raise RuntimeError("Bad value")
         if value.startswith("0x"):
             value = value[2:]
         decimal = int(value, 16)
+        return f"{decimal:,}"
+
+class StringToIntFormatter(DetailValueFormatter):
+    def format(self, key, value) -> str:
+        print(f"key: {key}, value: {value}")
+        if type(value) != str:
+            raise RuntimeError("Bad value")
+        decimal = int(value)
         return f"{decimal:,}"
 
 """
@@ -171,6 +231,12 @@ Helper object to for a json number into a decimal string with digit separators
 """
 IntToDecimal = IntToDecimalFormatter()
 
+
+"""
+Helper object to format a string into a string representation with digit separators.
+"""
+StringToInt = StringToIntFormatter()
+
 class DashboardApp:
     """
     Basic class for building a dashboard. Associates unique ids to the status of the invariant
@@ -189,7 +255,10 @@ class DashboardApp:
 
         id is the id of the monitor target, and violate is the raw payload sent by the server.
         """
-        pass
+        self.last_message_update = time.time()
+        # Send a message to slack when a violation is detected for a monitor target
+        self.slack.send_message(f"Invariant violation detected for {self.format_id(id)}")
+        self.slack.send_message(f"Details: {violation}")
 
     def format_id(self, id: str) -> str:
         """
@@ -208,6 +277,19 @@ class DashboardApp:
         self.state = {} #type:Dict[str,InvariantStatus]
         self.register_order = [] #type:List[Dict[str,str]]
         self.id_key = id_key
+        self.slack = Slack()
+        self.clean_block_count = 1000
+        self.last_message_update = time.time()
+
+    def check_no_violations(self, block_number: int):
+        now = time.time()
+        if now - self.last_message_update >= 3600:
+            hour_start = datetime.fromtimestamp(self.last_message_update)
+            hour_end = datetime.fromtimestamp(now)
+            msg = f"From {hour_start.strftime('%H:%M')} to {hour_end.strftime('%H:%M')} no violations were recorded.\n"
+            msg += f"Last checked block number: {block_number}"
+            self.slack.send_message(msg)
+            self.last_message_update = now
 
     def route(self, app: Flask):
         """
@@ -236,6 +318,7 @@ class DashboardApp:
             self.state[id].update(data)
             if self.state[id].status == Status.VIOLATED and old_state != Status.VIOLATED:
                 self.on_violation(id, data)
+            self.check_no_violations(self.state[id].block_number)
             
             return jsonify({"status": "accepted"}), 200
         
@@ -248,4 +331,4 @@ class DashboardApp:
             if id not in self.state:
                 return jsonify({"status": "not found"}), 400
             return self.state[id].getStatus(self.formatters), 200
-        
+

@@ -22,20 +22,26 @@ class ProxyCallDict(TypedDict):
     data: str
     apikey: str
 
-
+# Updated spec includes "voDelta" condition
 spec = {
-    "totalSupplyGteTotalDebt": dashboard_app.ConditionSpec(
-        display_name="Total Supply ≥ Total Debt",
+    # NEW BLOCK: to match the "voDelta" usage from Go
+    "voDelta": dashboard_app.ConditionSpec(
+        display_name="Balance Check Condition (voDelta)",
         details=[
             dashboard_app.ConditionDetail(
-                id="atokenSupply",
-                display_name="AToken Total Supply",
+                id="atokenSupplyPlusAccrued",
+                display_name="Supply + Accrued",
                 fmt=dashboard_app.HexToDecimal
             ),
             dashboard_app.ConditionDetail(
-                id="variableDebtSupply",
-                display_name="Total Debt",
+                id="variableDebtPlusVirtualBal",
+                display_name="Debt + Virtual Bal",
                 fmt=dashboard_app.HexToDecimal
+            ),
+            dashboard_app.ConditionDetail(
+                id="delta",
+                display_name="Delta (Debt + Virtual Bal - Supply - Accrued)",
+                fmt=dashboard_app.StringToInt
             ),
         ]
     )
@@ -53,7 +59,6 @@ def filter_rate_limited(r) -> bool:
 
 class AaveDashboard(dashboard_app.DashboardApp):
     def __init__(self):
-        #fs_cache = requests_cache.backends.filesystem.FileCache("name_cache", use_cache_dir=True, filter_fn=filter_rate_limited)
         self.session = requests.Session()
         super().__init__(id_key="id", fmt_instructions=spec)
 
@@ -64,7 +69,7 @@ class AaveDashboard(dashboard_app.DashboardApp):
         while True:
             if tries == 5:
                 return None
-            tries = tries + 1
+            tries += 1
             res = self.session.get(url)
             data = res.json()
             if "result" in data:
@@ -74,7 +79,7 @@ class AaveDashboard(dashboard_app.DashboardApp):
                 return data["result"]
             else:
                 return None
-            
+
     def _decode_abi_string(self, s: str) -> Optional[str]:
         if s[0:2] != "0x":
             return None
@@ -111,15 +116,14 @@ class AaveDashboard(dashboard_app.DashboardApp):
 
         if symbol is None and name is None:
             return f"Reserve with Address {id}"
-        
         if name is not None and symbol is not None:
             return f"{name} ({symbol}) Reserve"
         if name is not None:
             return f"{name} Reserve"
         return f"{symbol} Reserve"
 
-dashboard=AaveDashboard()
+dashboard = AaveDashboard()
 dashboard.route(app)
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host="0.0.0.0", debug=True)
