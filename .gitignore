@@ -45,6 +45,7 @@ profile.cov
 /dashboard/assets/bundle.js
 /dashboard/assets/bundle.js.map
 /dashboard/assets/package-lock.json
+/dashboard/__pycache__
 
 **/yarn-error.log
 logs/

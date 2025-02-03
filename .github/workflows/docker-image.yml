@@ -7,10 +7,11 @@ on:
   pull_request:
     branches:
       - safeguard
+  workflow_dispatch:
 
 jobs:
   build-and-push:
-    runs-on: ubuntu-latest
+    runs-on: Linux-ARM64
     if: ${{ github.ref == 'refs/heads/safeguard' }}
     permissions:
       id-token: write
@@ -32,23 +33,34 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Build the Docker image and push it
+      # Build images and push it
       - name: Build, tag, and push docker image to Amazon ECR
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          REPOSITORY: eth-monitoring
-          IMAGE_TAG: ${{ github.sha }}
+          GETH_REPOSITORY: eth-monitoring
+          DASHBOARD_REPOSITORY: eth-dashboard
+          GITHUB_SHA: ${{ github.sha }}
+          PLUGIN_NAME: aavev3
         run: |
-          docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG .
-          docker push $REGISTRY/$REPOSITORY:$IMAGE_TAG
+          # build geth image
+          docker build --build-arg PLUGIN_NAME=$PLUGIN_NAME --target geth --platform linux/arm64 -t $REGISTRY/$GETH_REPOSITORY:$PLUGIN_NAME-${GITHUB_SHA::7} --push .
+          
+          # build dashboard image
+          docker build --target dashboard --platform linux/arm64 -t $REGISTRY/$GETH_REPOSITORY:$PLUGIN_NAME-dashboard --push .
+          # TODO: create dashboard repository and change dashboard image tag
+
   build-test:
-    runs-on: ubuntu-latest
+    runs-on: Linux-ARM64
     if: ${{ github.ref != 'refs/heads/safeguard' }}
     steps:
       # Checkout the repository
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Build the Docker image
-      - name: Build docker
-        run: docker build .
+      # Build the Docker
+      - name: Build geth and dashboard images
+        env:
+          AAVE_PLUGIN: aavev3
+        run: |
+          docker build --build-arg PLUGIN_NAME=$AAVE_PLUGIN --target geth --platform linux/arm64 -t geth:test .
+          docker build --target dashboard --platform linux/arm64 -t dashboard:test .

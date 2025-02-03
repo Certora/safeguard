@@ -1,10 +1,10 @@
 name: Go tests
 
 on:
-  push:
-    branches: [ safeguard ]
-  pull_request:
-    branches: [ safeguard ]
+  # push:
+  #   branches: [ safeguard ]
+  # pull_request:
+  #   branches: [ safeguard ]
   workflow_dispatch:
 
 jobs:

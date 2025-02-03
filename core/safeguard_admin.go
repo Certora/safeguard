@@ -345,7 +345,9 @@ func initSafeguardTCP() {
 func init() {
 	management, present := os.LookupEnv(SafeguardModeEnv)
 	if !present {
-		fmt.Printf("%s not set, taking no further action\n", SafeguardModeEnv)
+		if os.Getenv("CI") == "" {
+			fmt.Printf("%s not set, taking no further action\n", SafeguardModeEnv)
+		}
 	}
 	if management == "SIGNAL" {
 		initSafeguardSignals()
@@ -359,6 +361,8 @@ func init() {
 	} else if management == "STATIC" {
 		loadInitial()
 	} else {
-		fmt.Printf("Unrecognized safeguard mode: %s, ignoring and taking no further action\n", management)
+		if os.Getenv("CI") == "" {
+			fmt.Printf("Unrecognized safeguard mode: %s, ignoring and taking no further action\n", management)
+		}
 	}
 }
