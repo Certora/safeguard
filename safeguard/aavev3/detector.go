@@ -211,7 +211,6 @@ func invariantChecks(blockNumber big.Int, statedb *state.StateDB, mr *etherapi.M
 
 		reserveLogger.Info("Starting storage reads")
 		fullConfiguration := readUintFromStorage(statedb, reserveDataPointer)
-		// TODO: maybe need a not operator in the reserveFactor calculation.
 		reserveFactor := fullConfiguration.And(fullConfiguration.Rsh(fullConfiguration, 64), uint16Mask)
 		reserveLogger.Debug("Storage read", "reserveFactor", toHex(reserveFactor), "readFrom", reserveDataPointer)
 
