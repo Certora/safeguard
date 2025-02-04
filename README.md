@@ -20,7 +20,7 @@ This repository is based on the folder structure of the official geth repository
   Contains the base dashboard application (which is inherited by specific safeguard apps under the safeguard folder) and the accompanying UI HTML file. This module provides a web-based interface to monitor and interact with the Safeguard app.
 
 - **detectors/Uniswap**  
-  This folder is used mainly for local testing of the safeguard Uniswap app. It includes tools and scripts to simulate and detect specific conditions on Uniswap.
+  This folder is used mainly for local testing of the Safeguard Uniswap app. It includes tools and scripts to simulate and detect specific conditions on Uniswap.
   - **safeguard**  
     Contains all the information and source code related to the safeguard app. Detailed instructions on how to configure and use safeguard are located inside this folder at [safeguard/README.md](safeguard/README.md).
 
