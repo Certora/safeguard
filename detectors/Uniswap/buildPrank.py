@@ -26,18 +26,18 @@ def run_mine_events(address, api_token, command_type, token_or_key):
 
 def main(address, api_token, token_list):
     result = {
-        "http://localhost:5000/token-targets": json.dumps(
+        "http://localhost:8000/token-targets": json.dumps(
             [{"address": token} for token in token_list]
         ),
-        "http://localhost:5000/pool-targets": "[]"
+        "http://localhost:8000/pool-targets": "[]"
     }
 
     for token in token_list:
         url_token = "0x" + token[-40:]
-        url = f"http://localhost:5000/token-pools?token={url_token}"
+        url = f"http://localhost:8000/token-pools?token={url_token}"
         
 
-        transfer_url = f"http://localhost:5000/token-transfers?token={url_token}"
+        transfer_url = f"http://localhost:8000/token-transfers?token={url_token}"
         try:
             output = run_mine_events(address, api_token, 'pools', token)
             data = json.loads(output)
@@ -52,7 +52,7 @@ def main(address, api_token, token_list):
             for item in data.get('payload', []):
                 key = item.get('key')
                 if key:
-                    key_url = f"http://localhost:5000/pool-positions?key={key}"
+                    key_url = f"http://localhost:8000/pool-positions?key={key}"
                     
                     # Run mineEvents.py for the key
                     key_output = run_mine_events(address, api_token, 'positions', key)
