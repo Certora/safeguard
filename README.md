@@ -1,16 +1,6 @@
-## Go Ethereum
+## What is Safeguard?
 
-Golang execution layer implementation of the Ethereum protocol.
-
-[![API Reference](
-https://pkg.go.dev/badge/github.com/ethereum/go-ethereum
-)](https://pkg.go.dev/github.com/ethereum/go-ethereum?tab=doc)
-[![Go Report Card](https://goreportcard.com/badge/github.com/ethereum/go-ethereum)](https://goreportcard.com/report/github.com/ethereum/go-ethereum)
-[![Travis](https://app.travis-ci.com/ethereum/go-ethereum.svg?branch=master)](https://app.travis-ci.com/github/ethereum/go-ethereum)
-[![Discord](https://img.shields.io/badge/discord-join%20chat-blue.svg)](https://discord.gg/nthXNEv)
-
-Automated builds are available for stable releases and the unstable master branch. Binary
-archives are published at https://geth.ethereum.org/downloads/.
+**Safeguard** is a Geth extension that monitors Ethereum protocol invariants in real time to enhance the security of DeFi systems and prevent exploits. It continuously checks critical conditions on the chain and alerts operators through its dashboard interface if any invariant is violated.
 
 ## Project Structure
 
@@ -26,6 +16,21 @@ This repository is based on the folder structure of the official geth repository
     Contains all the information and source code related to the Safeguard app. Detailed instructions on how to configure and use safeguard are located inside this folder at [safeguard/README.md](safeguard/README.md).
 
   The rest of the repository follows the standard geth layout, ensuring compatibility with existing workflows while extending functionality with the above modules.
+
+
+## Go Ethereum
+
+Golang execution layer implementation of the Ethereum protocol.
+
+[![API Reference](
+https://pkg.go.dev/badge/github.com/ethereum/go-ethereum
+)](https://pkg.go.dev/github.com/ethereum/go-ethereum?tab=doc)
+[![Go Report Card](https://goreportcard.com/badge/github.com/ethereum/go-ethereum)](https://goreportcard.com/report/github.com/ethereum/go-ethereum)
+[![Travis](https://app.travis-ci.com/ethereum/go-ethereum.svg?branch=master)](https://app.travis-ci.com/github/ethereum/go-ethereum)
+[![Discord](https://img.shields.io/badge/discord-join%20chat-blue.svg)](https://discord.gg/nthXNEv)
+
+Automated builds are available for stable releases and the unstable master branch. Binary
+archives are published at https://geth.ethereum.org/downloads/.
 
 ## Building the source
 
