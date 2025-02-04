@@ -14,7 +14,7 @@ archives are published at https://geth.ethereum.org/downloads/.
 
 ## Project Structure
 
-This repository is based on the folder structure of the official geth repository with some additional directories to support our extended safeguard application. In particular, you will find these extra folders:
+This repository is based on the folder structure of the official geth repository with some additional directories to support our extended Safeguard application. In particular, you will find these extra folders:
 
 - **dashboard**  
   Contains the base dashboard application (which is inherited by specific safeguard apps under the safeguard folder) and the accompanying UI HTML file. This module provides a web-based interface to monitor and interact with the safeguard app.
