@@ -63,7 +63,6 @@ func PercentMul(value, percentage *uint256.Int) (*uint256.Int, error) {
 }
 
 var aavePoolAddress = common.HexToAddress("0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2")
-
 var reservesCountSlot = uint256.NewInt(0x3B).Bytes32() // 59 in hex, slot of reserves count
 var reservesListSlot = uint256.NewInt(0x36).Bytes32()  // 54 in hex, slot of _reservesList mapping
 var reserveDataSlot = uint256.NewInt(0x34).Bytes32()   // 52 in hex, slot of _reserves mapping
@@ -107,7 +106,6 @@ accruedToTreasury_addition_due_to_update = PercentMul(tmp2, reserveFactor)
 Invariant:
   aTokenTotalSupply + accruedToTreasury_in_storage + accruedToTreasury_addition_due_to_update <= variableDebtTotalSupply + virtualUnderlyingBalance
 */
-
 
 func readAddressFromStorage(statedb *state.StateDB, where *uint256.Int) common.Address {
 	addressRaw := statedb.GetState(aavePoolAddress, where.Bytes32())

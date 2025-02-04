@@ -2,10 +2,6 @@ FROM golang:1.22-bullseye AS builder
 
 # Choose which plugin to use
 ARG PLUGIN_NAME
-RUN if [ -z "$PLUGIN_NAME" ]; then \
-        echo "ERROR: The plugin name is required but not provided."; \
-        exit 1; \
-    fi
 
 COPY go.mod /go-ethereum/
 COPY go.sum /go-ethereum/
@@ -13,7 +9,7 @@ RUN cd /go-ethereum && go mod download
 
 ADD . /go-ethereum
 RUN cd /go-ethereum/safeguard && \
-	export SAFEGUARD_OBJ_PATH=$(pwd)/safeguard.so && \
+    export SAFEGUARD_OBJ_PATH=$(pwd)/safeguard.so && \
     ./build_plugin.sh $PLUGIN_NAME && \
     cd /go-ethereum && \
     go run build/ci.go install ./cmd/geth
@@ -22,6 +18,8 @@ RUN cd /go-ethereum/safeguard && \
 FROM ubuntu:22.04 AS geth
 
 COPY --from=builder /go-ethereum/safeguard/safeguard.so /go-ethereum/build/bin/geth /usr/local/bin/
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 ENV SAFEGUARD_PLUGIN_PATH=/usr/local/bin/safeguard.so \
     SAFEGUARD_OBJ_PATH=/usr/local/bin/safeguard.so \
@@ -35,12 +33,13 @@ ENTRYPOINT ["geth"]
 # Build dashboard
 FROM python:3.11-slim AS dashboard
 
-ADD ./safeguard/aavev3/app.py /home/safeguard/aavev3/app.py
+ARG PLUGIN_NAME
+ADD ./safeguard/$PLUGIN_NAME/app.py /home/safeguard/plugin/app.py
 ADD ./dashboard /home/dashboard
 
 # Install python dependencies
-RUN pip install flask_cors slack_sdk requests
+RUN pip install -r /home/dashboard/requirements.txt
 
-EXPOSE 5000
+EXPOSE 8000
 
-ENTRYPOINT ["python", "/home/safeguard/aavev3/app.py"]
+ENTRYPOINT ["gunicorn", "home.safeguard.plugin.app:app", "-b", "0.0.0.0:8000"]
