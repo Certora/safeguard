@@ -208,7 +208,7 @@
 
         async function fetchTargets() {
             try {
-                fetch('http://127.0.0.1:5000/targets').then((response) => {
+                fetch('http://127.0.0.1:8000/targets').then((response) => {
                     if (!response.ok) {
                         throw new Error('Network response was not ok');
                     }
@@ -226,7 +226,7 @@
 
         function fetchStatus(id, name) {
             try {
-                fetch(`http://127.0.0.1:5000/status/${encodeURIComponent(id)}`).then((response) => {
+                fetch(`http://127.0.0.1:8000/status/${encodeURIComponent(id)}`).then((response) => {
                     if(!response.ok) {
                         throw new Error('Network response was not ok');
                     }
@@ -348,7 +348,7 @@
                 return;
             }
             try {
-                const response = await fetch(`http://127.0.0.1:5000/monitor?address=${encodeURIComponent(address)}`, { method: 'POST' });
+                const response = await fetch(`http://127.0.0.1:8000/monitor?address=${encodeURIComponent(address)}`, { method: 'POST' });
                 if (!response.ok) {
                     throw new Error('Network response was not ok');
                 }
