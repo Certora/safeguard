@@ -54,7 +54,7 @@ func getOrPrank(url string) (io.Reader, error) {
 func getHost() string {
 	p, exists := os.LookupEnv("CERT_HTTP_API_URL")
 	if !exists {
-		return "http://localhost:5000"
+		return "http://localhost:8000"
 	}
 	return p
 }
