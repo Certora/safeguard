@@ -4,11 +4,9 @@ on:
   push:
     branches:
       - safeguard
-      - jtoman/aave-v3-detector # TODO: Remove before merging
   pull_request:
     branches:
       - safeguard
-      - jtoman/aave-v3-detector # TODO: Remove before merging
   workflow_dispatch:
 
 jobs:
@@ -39,7 +37,7 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build docker image
-        if: ${{ github.ref != 'refs/heads/jtoman/aave-v3-detector' }} # TODO: change to safeguard
+        if: ${{ github.ref != 'refs/heads/safeguard' }}
         run: docker buildx bake --provenance=false --load
         env:
           COMMIT_SHA: ${{ github.sha }}
@@ -48,7 +46,7 @@ jobs:
 
       # Build images and push it
       - name: Build, tag, and push docker image to Amazon ECR
-        if: ${{ github.ref == 'refs/heads/jtoman/aave-v3-detector' }} # TODO: change to safeguard
+        if: ${{ github.ref == 'refs/heads/safeguard' }}
         run: docker buildx bake --provenance=false --push
         env:
           COMMIT_SHA: ${{ github.sha }}
