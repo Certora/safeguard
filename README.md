@@ -12,6 +12,20 @@ https://pkg.go.dev/badge/github.com/ethereum/go-ethereum
 Automated builds are available for stable releases and the unstable master branch. Binary
 archives are published at https://geth.ethereum.org/downloads/.
 
+## Project Structure
+
+This repository is based on the folder structure of the official geth repository with some additional directories to support our extended safeguard application. In particular, you will find these extra folders:
+
+- **dashboard**  
+  Contains the base dashboard application (which is inherited by specific safeguard apps under the safeguard folder) and the accompanying UI HTML file. This module provides a web-based interface to monitor and interact with the safeguard app.
+
+- **detectors/Uniswap**  
+  This folder is used mainly for local testing of the safeguard Uniswap app. It includes tools and scripts to simulate and detect specific conditions on Uniswap.
+  - **safeguard**  
+    Contains all the information and source code related to the safeguard app. Detailed instructions on how to configure and use safeguard are located inside this folder at [safeguard/README.md](safeguard/README.md).
+
+  The rest of the repository follows the standard geth layout, ensuring compatibility with existing workflows while extending functionality with the above modules.
+
 ## Building the source
 
 For prerequisites and detailed build instructions please read the [Installation Instructions](https://geth.ethereum.org/docs/getting-started/installing-geth).
