@@ -12,6 +12,7 @@ on:
 jobs:
   build-and-push:
     runs-on: Linux-ARM64
+    if: ${{ github.ref == 'refs/heads/safeguard' }}
     permissions:
       id-token: write
       contents: read
@@ -35,7 +36,6 @@ jobs:
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
-
       - name: Build docker image
         if: ${{ github.ref != 'refs/heads/safeguard' }}
         run: docker buildx bake --provenance=false --load

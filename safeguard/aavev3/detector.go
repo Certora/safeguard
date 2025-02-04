@@ -63,8 +63,6 @@ func PercentMul(value, percentage *uint256.Int) (*uint256.Int, error) {
 }
 
 var aavePoolAddress = common.HexToAddress("0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2")
-
-// TODO: Verify
 var reservesCountSlot = uint256.NewInt(0x3B).Bytes32() // 59 in hex, slot of reserves count
 var reservesListSlot = uint256.NewInt(0x36).Bytes32()  // 54 in hex, slot of _reservesList mapping
 var reserveDataSlot = uint256.NewInt(0x34).Bytes32()   // 52 in hex, slot of _reserves mapping
@@ -211,7 +209,6 @@ func invariantChecks(blockNumber big.Int, statedb *state.StateDB, mr *etherapi.M
 
 		reserveLogger.Info("Starting storage reads")
 		fullConfiguration := readUintFromStorage(statedb, reserveDataPointer)
-		// TODO: maybe need a not operator in the reserveFactor calculation.
 		reserveFactor := fullConfiguration.And(fullConfiguration.Rsh(fullConfiguration, 64), uint16Mask)
 		reserveLogger.Debug("Storage read", "reserveFactor", toHex(reserveFactor), "readFrom", reserveDataPointer)
 
@@ -229,7 +226,6 @@ func invariantChecks(blockNumber big.Int, statedb *state.StateDB, mr *etherapi.M
 		reserveLogger.Debug("Storage read", "variableDebtTokenAddress", variableDebtTokenAddress, "readFrom", reserveDataPointer)
 
 		reserveDataPointer.AddUint64(reserveDataPointer, accruedToTreasuryOffset-variableDebtTokenOffset)
-		// TODO: Maybe should be read the only 128 lower bits according to ReserveData storage layout
 		accruedToTreasuryIndex := readUintFromStorage(statedb, reserveDataPointer)
 		accruedToTreasury.And(accruedToTreasuryIndex, uint128Mask)
 		reserveLogger.Debug("Storage read", "accruedToTreasury", toHex(accruedToTreasury), "readFrom", reserveDataPointer)

@@ -56,7 +56,6 @@ class Slack:
         except SlackApiError as e:
             print(f'Error sending message: {e}')
 
-
 """
 This module contains some common code for building a dashboard for invariant monitoring.
 
@@ -194,7 +193,6 @@ class InvariantStatus(object):
                     detail_dict["display"] = detail_display
                     condition_result["details"].append(detail_dict)
                 msg["info"].append(condition_result)
-            
             return msg
 
 
@@ -207,7 +205,6 @@ class HexToDecimalFormatter(DetailValueFormatter):
             value = value[2:]
         decimal = int(value, 16)
         return f"{decimal:,}"
-
 
 class StringToIntFormatter(DetailValueFormatter):
     def format(self, key, value) -> str:

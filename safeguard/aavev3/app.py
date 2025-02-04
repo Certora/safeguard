@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# dashboard_app_fix.py
+
 from flask import Flask
 from flask_cors import CORS
 from typing import Optional, Dict, TypedDict
@@ -86,7 +86,7 @@ class AaveDashboard(dashboard_app.DashboardApp):
         if s[0:2] != "0x":
             return None
         raw_bytes = bytes.fromhex(s[2:])
-        # abi encoding has 64 bytes of padding: 32 for the pointer, 32 for the length
+        # abi encoding has 64 bytes of padding: 32 for the pointer, 32 for the length field
         if len(raw_bytes) < 64:
             return None
         string_data = raw_bytes[64:]
