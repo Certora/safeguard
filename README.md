@@ -22,7 +22,7 @@ This repository is based on the folder structure of the official geth repository
 - **detectors/Uniswap**  
   This folder is used mainly for local testing of the Safeguard Uniswap app. It includes tools and scripts to simulate and detect specific conditions on Uniswap.
   - **safeguard**  
-    Contains all the information and source code related to the safeguard app. Detailed instructions on how to configure and use safeguard are located inside this folder at [safeguard/README.md](safeguard/README.md).
+    Contains all the information and source code related to the Safeguard app. Detailed instructions on how to configure and use safeguard are located inside this folder at [safeguard/README.md](safeguard/README.md).
 
   The rest of the repository follows the standard geth layout, ensuring compatibility with existing workflows while extending functionality with the above modules.
 
