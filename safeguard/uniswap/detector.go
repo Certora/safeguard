@@ -544,7 +544,7 @@ func init() {
 
 var safeguardState InvariantState
 
-var poolManagerAddress = common.HexToAddress("0xE8E23e97Fa135823143d6b9Cba9c699040D51F70")
+var poolManagerAddress = common.HexToAddress("0x000000000004444c5dc75cB358380D2e3dE08A90")
 
 var transferTopic = common.HexToHash("0x1b3d7edb2e9c0b0e7c525b20aaaef0f5940d2ed71663c7d39266ecafac728859")
 var swapTopic = common.HexToHash("0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f")
