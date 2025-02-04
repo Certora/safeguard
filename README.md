@@ -17,7 +17,7 @@ archives are published at https://geth.ethereum.org/downloads/.
 This repository is based on the folder structure of the official geth repository with some additional directories to support our extended Safeguard application. In particular, you will find these extra folders:
 
 - **dashboard**  
-  Contains the base dashboard application (which is inherited by specific safeguard apps under the safeguard folder) and the accompanying UI HTML file. This module provides a web-based interface to monitor and interact with the safeguard app.
+  Contains the base dashboard application (which is inherited by specific safeguard apps under the safeguard folder) and the accompanying UI HTML file. This module provides a web-based interface to monitor and interact with the Safeguard app.
 
 - **detectors/Uniswap**  
   This folder is used mainly for local testing of the safeguard Uniswap app. It includes tools and scripts to simulate and detect specific conditions on Uniswap.
