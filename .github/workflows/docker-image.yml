@@ -17,7 +17,6 @@ on:
 jobs:
   build:
     runs-on: Linux-ARM64
-    if: ${{ github.ref == 'refs/heads/safeguard' }}
     permissions:
       id-token: write
       contents: read
@@ -42,19 +41,27 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Set Plugin Name
+        run: echo "PLUGIN_NAME=${{ github.event.inputs.plugin_name || 'uniswap' }}" >> $GITHUB_ENV
+
+      # Build images
       - name: Build docker image
         if: ${{ github.ref != 'refs/heads/safeguard' }}
-        run: docker buildx bake --provenance=false --load
+        run: |
+          echo "PLUGIN_NAME=$PLUGIN_NAME"
+          docker buildx bake --provenance=false --load
         env:
           COMMIT_SHA: ${{ github.sha }}
-          PLUGIN_NAME: ${{ github.event.inputs.plugin_name }}
+          PLUGIN_NAME: ${{ env.PLUGIN_NAME }}
           USE_CACHE: 1
 
       # Build images and push it
       - name: Build, tag, and push docker image to Amazon ECR
         if: ${{ github.ref == 'refs/heads/safeguard' }}
-        run: docker buildx bake --provenance=false --push
+        run: |
+          echo "PLUGIN_NAME=$PLUGIN_NAME"
+          docker buildx bake --provenance=false --push
         env:
           COMMIT_SHA: ${{ github.sha }}
-          PLUGIN_NAME: ${{ github.event.inputs.plugin_name }}
+          PLUGIN_NAME: ${{ env.PLUGIN_NAME }}
           USE_CACHE: 1

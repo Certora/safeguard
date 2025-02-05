@@ -1,8 +1,3 @@
-group "default" {
-    targets = ["geth", "dashboard"]
-
-}
-
 variable "COMMIT_SHA" {
     default = null
     validation {
@@ -27,13 +22,16 @@ variable "IMAGE_BASE_NAME" {
     default = "092457480553.dkr.ecr.us-west-2.amazonaws.com/eth-monitoring"
 }
 
+group "default" {
+    targets = PLUGIN_NAME == "aavev3" ? ["geth", "dashboard"] : ["geth"]
+}
+
 target "common" {
     platforms = ["linux/arm64"]
     args = {
         PLUGIN_NAME = "${PLUGIN_NAME}"
     }
 }
-
 
 target "geth" {
     inherits = ["common"]
