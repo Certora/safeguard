@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-push:
+  build:
     runs-on: Linux-ARM64
     if: ${{ github.ref == 'refs/heads/safeguard' }}
     permissions:
@@ -36,12 +36,13 @@ jobs:
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
+
       - name: Build docker image
         if: ${{ github.ref != 'refs/heads/safeguard' }}
         run: docker buildx bake --provenance=false --load
         env:
           COMMIT_SHA: ${{ github.sha }}
-          PLUGIN_NAME: aavev3
+          PLUGIN_NAME: uniswap
           USE_CACHE: 1
 
       # Build images and push it
@@ -50,5 +51,5 @@ jobs:
         run: docker buildx bake --provenance=false --push
         env:
           COMMIT_SHA: ${{ github.sha }}
-          PLUGIN_NAME: aavev3
+          PLUGIN_NAME: uniswap
           USE_CACHE: 1
