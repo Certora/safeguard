@@ -8,6 +8,11 @@ on:
     branches:
       - safeguard
   workflow_dispatch:
+    inputs:
+      plugin_name:
+        description: "Plugin Name"
+        required: false
+        default: "uniswap"
 
 jobs:
   build:
@@ -42,7 +47,7 @@ jobs:
         run: docker buildx bake --provenance=false --load
         env:
           COMMIT_SHA: ${{ github.sha }}
-          PLUGIN_NAME: uniswap
+          PLUGIN_NAME: ${{ github.event.inputs.plugin_name }}
           USE_CACHE: 1
 
       # Build images and push it
@@ -51,5 +56,5 @@ jobs:
         run: docker buildx bake --provenance=false --push
         env:
           COMMIT_SHA: ${{ github.sha }}
-          PLUGIN_NAME: uniswap
+          PLUGIN_NAME: ${{ github.event.inputs.plugin_name }}
           USE_CACHE: 1
