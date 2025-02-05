@@ -17,7 +17,6 @@ on:
 jobs:
   build:
     runs-on: Linux-ARM64
-    if: ${{ github.ref == 'refs/heads/safeguard' }}
     permissions:
       id-token: write
       contents: read
