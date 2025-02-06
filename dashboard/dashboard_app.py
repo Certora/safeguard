@@ -16,6 +16,29 @@ class Slack:
     """
     A simple Slack client for sending alert messages.
     """
+    # Message templates as class constants
+    VIOLATION_MESSAGE_TEMPLATE = (
+        "❌ *Invariant Violation Alert{transition_info}*\n"
+        "• Target: {target}\n"
+        "• Block: {block}\n"
+        "• Violation Details:\n```{details}```"
+    )
+
+    RECOVERY_MESSAGE_TEMPLATE = (
+        "✅ *Invariant Recovery Alert{transition_info}*\n"
+        "• Target: {target}\n"
+        "• Block: {block}\n"
+        "• Invariant condition has been restored."
+        "• Details: {details}"
+    )
+
+    ERROR_MESSAGE_TEMPLATE = (
+        "⚠️ *Invariant Error Alert{transition_info}*\n"
+        "• Target: {target}\n"
+        "• Block: {block}\n"
+        "• Error: ```{details}```"
+    )
+
     def __init__(self, channel: str = '#aave-alert-test', slack_token: Optional[str] = None):
         if not slack_token:
             slack_token = os.environ.get('SLACK_TOKEN')
@@ -185,61 +208,6 @@ class DashboardApp:
         self.clean_block_count = 1000
         self.last_message_update = time.time()
 
-    def send_slack_alert(
-        self,
-        alert_type: str,
-        target: str,
-        block_number: int,
-        details: Optional[Any] = None,
-        prev_status: Optional[Status] = None
-    ):
-        """
-        Constructs and sends a Slack alert based on the alert_type.
-
-        Parameters
-        ----------
-        alert_type : str
-            The type of alert ("violation", "recovery", "error", or "update").
-        target : str
-            The monitor target's identifier.
-        block_number : int
-            The current block number at which the status change was detected.
-        details : Optional[Any]
-            Additional details to include in the message.
-        prev_status : Optional[Status]
-            The previous status (only used for violation alerts).
-        """
-        formatted_target = self.format_id(target)
-        if alert_type == "violation":
-            # Include previous state information if available.
-            transition_info = f" (Transitioned from {prev_status.name})" if prev_status else ""
-            message = (
-                f"❌ *Invariant Violation Alert{transition_info}*\n"
-                f"• Target: {formatted_target}\n"
-                f"• Block: {block_number}\n"
-                f"• Violation Details:\n```{details}```"
-            )
-        elif alert_type == "recovery":
-            message = (
-                f"✅ *Invariant Recovery Alert*\n"
-                f"• Target: {formatted_target}\n"
-                f"• Block: {block_number}\n"
-                f"• Invariant condition has been restored."
-                f"• Details: {details}"
-            )
-        elif alert_type == "error":
-            message = (
-                f"⚠️ *Invariant Error Alert*\n"
-                f"• Target: {formatted_target}\n"
-                f"• Block: {block_number}\n"
-                f"• Error: ```{details}```"
-            )
-        else:
-            raise ValueError(f"Invalid alert type: {alert_type}")
-
-        self.slack.send_message(message)
-        self.last_message_update = time.time()
-
     def handle_status_change(
         self,
         target: str,
@@ -264,15 +232,37 @@ class DashboardApp:
         payload : Dict[str, Any]
             The raw update payload.
         """
+        message = None
+        formatted_target = self.format_id(target)
+        transition_info = f" (Transitioned from {old_status})"
         # Transition into a violation state from a non-violation state.
         if new_status == Status.VIOLATED and old_status in {Status.OK, Status.UNKNOWN, Status.ERROR}:
-            self.send_slack_alert("violation", target, block_number, details=payload, prev_status=old_status)
+            message = self.slack.VIOLATION_MESSAGE_TEMPLATE.format(
+                transition_info=transition_info,
+                target=formatted_target,
+                block=block_number,
+                details=payload
+            )
         # Transition into a healthy state from a violation state.
         elif new_status == Status.OK and old_status == Status.VIOLATED:
-            self.send_slack_alert("recovery", target, block_number, details=payload)
+            message = self.slack.RECOVERY_MESSAGE_TEMPLATE.format(
+                transition_info=transition_info,
+                target=formatted_target,
+                block=block_number,
+                details=payload
+            )
         # In case of error status.
         elif new_status == Status.ERROR:
-            self.send_slack_alert("error", target, block_number, details=payload)
+            message = self.slack.ERROR_MESSAGE_TEMPLATE.format(
+                transition_info=transition_info,
+                target=formatted_target,
+                block=block_number,
+                details=payload
+            )
+
+        if message:
+            self.slack.send_message(message)
+            self.last_message_update = time.time()
 
     def format_id(self, id: str) -> str:
         """
