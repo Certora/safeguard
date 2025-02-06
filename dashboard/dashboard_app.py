@@ -280,7 +280,7 @@ class DashboardApp:
         """
         return id
 
-    def check_no_violations(self, block_number: int):
+    def check_no_new_violations(self, block_number: int):
         now = time.time()
         if now - self.last_message_update >= 3600:
             hour_start = datetime.fromtimestamp(self.last_message_update)
@@ -315,7 +315,7 @@ class DashboardApp:
             self.state[target_id].update(data)
             new_status = self.state[target_id].status
             self.handle_status_change(target_id, old_status, new_status, self.state[target_id].block_number, data)
-            self.check_no_violations(self.state[target_id].block_number)
+            self.check_no_new_violations(self.state[target_id].block_number)
             return jsonify({"status": "accepted"}), 200
 
         @app.route("/targets", methods=["GET"])
