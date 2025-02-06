@@ -4,94 +4,49 @@ from flask import Flask, jsonify, request
 from flask import abort as wrapped_abort
 from enum import Enum
 from dataclasses import dataclass
-
 import os
-from typing import Optional
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
 
 class Slack:
-    '''
-    Description
-    -----------
-    This class is used to send messages with runs summaries to a Slack channel.
-    '''
+    """
+    A simple Slack client for sending alert messages.
+    """
     def __init__(self, channel: str = '#aave-alert-test', slack_token: Optional[str] = None):
-        '''
-        Summary
-        -------
-        Initializes a new instance of the Slack class.
-
-        Parameters
-        ----------
-        channel : str, default = '#aave-alert-test'
-            The name of the Slack channel to send messages to.
-        slack_token : Optional[str], default = None
-            The Slack API token to use for authentication. If not provided, it will be loaded from the 'SLACK_TOKEN' environment variable.
-        '''
         if not slack_token:
             slack_token = os.environ.get('SLACK_TOKEN')
-        
         self.client = WebClient(token=slack_token)
         self.channel = channel
 
     def send_message(self, message: str):
-        '''
-        Summary
-        -------
-        Sends a message to the Slack channel.
-
-        Parameters
-        ----------
-        message : str
-            The message to send.
-        '''
         try:
             self.client.chat_postMessage(channel=self.channel, text=message)
             print(f'Message sent: {message}')
         except SlackApiError as e:
             print(f'Error sending message: {e}')
 
-"""
-This module contains some common code for building a dashboard for invariant monitoring.
 
-This can be used for a production dashboard, but is primarily meant for debugging.
-
-The core piece is DashboardApp, which can be extended to receive update messages posted by the
-safeguard node and serve status results to the dashboard page (the html for which is included here).
-"""
+# ---------------------------------------------------------------------
+# Formatters and Models for condition details remain unchanged
+# ---------------------------------------------------------------------
 
 class DetailValueFormatter(ABC):
-    """
-    Basic class used to format the values in a condition detail.
-    """
     @abstractmethod
     def format(self, key: str, value: Any) -> str:
-        """
-        Given a key and value, return a pretty-printed representation of the value.
-        """
         pass
 
 @dataclass
 class ConditionDetail:
-    """
-    Describes a detail in a condition. id is the key in the details dictionary, display_name is the human readable name of detail,
-    and fmt is either a DetailValueFormatter, or a format string (using %s etc.)
-    """
     id: str
     display_name: str
     fmt: Union[str, DetailValueFormatter]
 
 @dataclass
 class ConditionSpec:
-    """
-    Describes one of the conditions checked as part of an overall invariant. display_name is the human readable desciption of the condition,
-    and details is a list of ConditionDetail objects which describe how to format the details of the condition.
-    """
     display_name: str
     details: List[ConditionDetail]
 
@@ -101,232 +56,274 @@ class Status(Enum):
     VIOLATED = 3
     OK = 4
 
-def abort(s, msg):
-    wrapped_abort(s, msg)
+def abort(status_code, msg):
+    wrapped_abort(status_code, msg)
 
-class InvariantStatus(object):
+class InvariantStatus:
     def __init__(self):
-        self.status = Status.UNKNOWN
-        self.timestamp = 0
-        self.block_number = 0
-        self.conditions = {} #type: List[Dict[str,Any]]
-        self.err = None #type: Optional[str]
-        pass
+        self.status: Status = Status.UNKNOWN
+        self.timestamp: int = 0
+        self.block_number: int = 0
+        self.conditions: List[Dict[str, Any]] = []
+        self.err: Optional[str] = None
 
-    def update(self, payload: Dict[str,Any]):
-        if "blockNumber" not in payload or type(payload["blockNumber"]) != int:
+    def update(self, payload: Dict[str, Any]):
+        if "blockNumber" not in payload or not isinstance(payload["blockNumber"], int):
             abort(400, "Missing blockNumber parameter")
-        if "calculationTimestamp" not in payload or type(payload["calculationTimestamp"]) != int:
-            abort(400, "missing timestamp")
-        if "invariantStatus" not in payload or type(payload["invariantStatus"]) != str or payload["invariantStatus"] not in {"error", "success", "failure"}:
-            abort(400, "missing or ill-formed invariantStatus")
-        
+        if "calculationTimestamp" not in payload or not isinstance(payload["calculationTimestamp"], int):
+            abort(400, "Missing timestamp")
+        if ("invariantStatus" not in payload or not isinstance(payload["invariantStatus"], str) or
+            payload["invariantStatus"] not in {"error", "success", "failure"}):
+            abort(400, "Missing or ill-formed invariantStatus")
+
         if payload["invariantStatus"] == "error":
-            if "error" not in payload or type(payload["error"]) != str:
-                abort(400, "missing or illegal error message")
+            if "error" not in payload or not isinstance(payload["error"], str):
+                abort(400, "Missing or illegal error message")
             self.timestamp = payload["calculationTimestamp"]
             self.block_number = payload["blockNumber"]
             self.status = Status.ERROR
             self.err = payload["error"]
             return
-    
-        if "conditionsChecked" not in payload or type(payload["conditionsChecked"]) != list:
-            abort(400, "missing or mal-formed conditions checked")
-        
-        if payload["invariantStatus"] == "success":
-            stat = Status.OK
-        else:
-            stat = Status.VIOLATED
-        
-        # now validate the conditions checked
-        conds = payload["conditionsChecked"]
-        for c in conds:
-            if type(c) != dict:
-                abort(400, "malformed conditions")
-            
-            if "condition" not in c or type(c["condition"]) != str:
-                abort(400, "malformed condition name")
-            if "status" not in c or type(c["status"]) != bool:
-                abort(400, "incorrect status")
-            if "values" not in c or type(c["values"]) != dict:
-                abort(400, "missing condition values")
 
-        self.status = stat
-        self.conditions = conds
+        if "conditionsChecked" not in payload or not isinstance(payload["conditionsChecked"], list):
+            abort(400, "Missing or malformed conditions checked")
+
+        self.status = Status.OK if payload["invariantStatus"] == "success" else Status.VIOLATED
+        for c in payload["conditionsChecked"]:
+            if not isinstance(c, dict):
+                abort(400, "Malformed conditions")
+            if "condition" not in c or not isinstance(c["condition"], str):
+                abort(400, "Malformed condition name")
+            if "status" not in c or not isinstance(c["status"], bool):
+                abort(400, "Incorrect status")
+            if "values" not in c or not isinstance(c["values"], dict):
+                abort(400, "Missing condition values")
+
+        self.conditions = payload["conditionsChecked"]
         self.block_number = payload["blockNumber"]
         self.timestamp = payload["calculationTimestamp"]
         self.err = None
-    
-    def getStatus(self, condition: Dict[str, ConditionSpec]) -> Dict[str,Any]:
-        msg = {}
+
+    def getStatus(self, condition_specs: Dict[str, ConditionSpec]) -> Dict[str, Any]:
         if self.status == Status.UNKNOWN:
             return {"status": "not ready", "message": "Not loaded"}
         elif self.status == Status.ERROR:
             return {"status": "error", "message": self.err}
-        else:
-            msg = {
-                "blockNumber": self.block_number,
-                "time": self.timestamp,
-                "status": "success" if self.status == Status.OK else "violated"
-            }
-            msg["info"] = []
-            for c in self.conditions:
-                condName = c["condition"]
-                condition_result = {
-                    "id": condName,
-                    "status": c["status"]
-                }
-                if condName not in condition:
-                    abort(500, f"Unknown condition name {condName}")
-                cs = condition[condName]
-                condition_result["name"] = cs.display_name
-                condition_result["details"] = []
-                for detail in cs.details:
-                    if detail.id not in c["values"]:
-                        abort(500, f"missing detail {detail.id}")
-                    detail_value = c["values"][detail.id]
-                    detail_dict = {"id": detail.id, "name": detail.display_name}
-                    if type(detail.fmt) == str:
-                        detail_display = detail.fmt % (detail_value)
-                    else:
-                        detail_display = detail.fmt.format(detail.id, detail_value)
-                    detail_dict["display"] = detail_display
-                    condition_result["details"].append(detail_dict)
-                msg["info"].append(condition_result)
-            return msg
 
+        result = {
+            "blockNumber": self.block_number,
+            "time": self.timestamp,
+            "status": "success" if self.status == Status.OK else "violated",
+            "info": []
+        }
+        for c in self.conditions:
+            cond_name = c["condition"]
+            if cond_name not in condition_specs:
+                abort(500, f"Unknown condition name {cond_name}")
+            cs = condition_specs[cond_name]
+            detail_list = []
+            for detail in cs.details:
+                if detail.id not in c["values"]:
+                    abort(500, f"Missing detail {detail.id}")
+                value = c["values"][detail.id]
+                if isinstance(detail.fmt, str):
+                    display_value = detail.fmt % value
+                else:
+                    display_value = detail.fmt.format(detail.id, value)
+                detail_list.append({"id": detail.id, "name": detail.display_name, "display": display_value})
+            result["info"].append({
+                "id": cond_name,
+                "name": cs.display_name,
+                "status": c["status"],
+                "details": detail_list
+            })
+        return result
+
+# ---------------------------------------------------------------------
+# Formatter helper objects (unchanged)
+# ---------------------------------------------------------------------
 
 class HexToDecimalFormatter(DetailValueFormatter):
-    def format(self, key, value) -> str:
-        if type(value) != str:
+    def format(self, key: str, value: Any) -> str:
+        if not isinstance(value, str):
             raise RuntimeError("Bad value")
-        if value.startswith("0x"):
-            value = value[2:]
-        decimal = int(value, 16)
-        return f"{decimal:,}"
+        val = value[2:] if value.startswith("0x") else value
+        return f"{int(val, 16):,}"
 
 class StringToIntFormatter(DetailValueFormatter):
-    def format(self, key, value) -> str:
-        if type(value) != str:
+    def format(self, key: str, value: Any) -> str:
+        if not isinstance(value, str):
             raise RuntimeError("Bad value")
-        decimal = int(value)
-        return f"{decimal:,}"
+        return f"{int(value):,}"
 
-"""
-Helper object to format a hexadecimal string into a decimal string representation with digit separators.
-"""
-HexToDecimal = HexToDecimalFormatter()
-    
 class IntToDecimalFormatter(DetailValueFormatter):
-    def format(self, key, value) -> str:
-        if type(value) != int:
+    def format(self, key: str, value: Any) -> str:
+        if not isinstance(value, int):
             raise RuntimeError("Bad value")
         return f"{value:,}"
-        
 
-"""
-Helper object to for a json number into a decimal string with digit separators
-"""
+HexToDecimal = HexToDecimalFormatter()
 IntToDecimal = IntToDecimalFormatter()
-
-
-"""
-Helper object to format a string into a string representation with digit separators.
-"""
 StringToInt = StringToIntFormatter()
+
+# ---------------------------------------------------------------------
+# DashboardApp with improved status message handling
+# ---------------------------------------------------------------------
 
 class DashboardApp:
     """
-    Basic class for building a dashboard. Associates unique ids to the status of the invariant
-    result for that id. The actual ID chosen can be anything. We will call the "thing" associated
-    with an id (the thing being monitored) the "monitor target."
-
-    The status of monitor targets are communicated with invariant status messages, the format of these
-    messages is described in Message.md
+    Core class for building a dashboard to monitor invariant statuses.
+    Each monitored target is assigned an ID and its state (OK, VIOLATED, ERROR, UNKNOWN)
+    is updated via HTTP requests. This class also sends Slack alerts on state transitions.
     """
-
-    def on_violation(self, id: str, violation: Dict[str, Any]):
-        """
-        Called on the first violation observed for a "monitor target". More precisely, if the status of a monitor
-        goes from any that is not VIOLATED to VIOLATED, this function is called. Thus, if a monitor results
-        goes from good -> bad -> good -> bad this function will be called twice.
-
-        id is the id of the monitor target, and violate is the raw payload sent by the server.
-        """
-        self.last_message_update = time.time()
-        # Send a message to slack when a violation is detected for a monitor target
-        self.slack.send_message(f"New invariant violation detected for {self.format_id(id)}")
-        self.slack.send_message(f"Details: {violation}")
-
-    def format_id(self, id: str) -> str:
-        """
-        Formats the monitor target's ID into something more descriptive (e.g., pool address to pool name). By
-        default uses the monitor target's id.
-        """
-        return id
-
     def __init__(self, id_key: str, fmt_instructions: Dict[str, ConditionSpec]):
-        """
-        id_key is the key in the top-level envelope holds the monitor target's id
-        fmt_instructions maps the condition ids that appear in the invariant envelope's condition
-        to the instructions on how to format the condition using the ConditionSpec
-        """
         self.formatters = fmt_instructions
-        self.state = {} #type:Dict[str,InvariantStatus]
-        self.register_order = [] #type:List[Dict[str,str]]
+        self.state: Dict[str, InvariantStatus] = {}
+        self.register_order: List[Dict[str, str]] = []
         self.id_key = id_key
         self.slack = Slack()
         self.clean_block_count = 1000
         self.last_message_update = time.time()
+
+    def send_slack_alert(
+        self,
+        alert_type: str,
+        target: str,
+        block_number: int,
+        details: Optional[Any] = None,
+        prev_status: Optional[Status] = None
+    ):
+        """
+        Constructs and sends a Slack alert based on the alert_type.
+
+        Parameters
+        ----------
+        alert_type : str
+            The type of alert ("violation", "recovery", "error", or "update").
+        target : str
+            The monitor target's identifier.
+        block_number : int
+            The current block number at which the status change was detected.
+        details : Optional[Any]
+            Additional details to include in the message.
+        prev_status : Optional[Status]
+            The previous status (only used for violation alerts).
+        """
+        formatted_target = self.format_id(target)
+        if alert_type == "violation":
+            # Include previous state information if available.
+            transition_info = f" (Transitioned from {prev_status.name})" if prev_status else ""
+            message = (
+                f"❌ *Invariant Violation Alert{transition_info}*\n"
+                f"• Target: {formatted_target}\n"
+                f"• Block: {block_number}\n"
+                f"• Violation Details:\n```{details}```"
+            )
+        elif alert_type == "recovery":
+            message = (
+                f"✅ *Invariant Recovery Alert*\n"
+                f"• Target: {formatted_target}\n"
+                f"• Block: {block_number}\n"
+                f"• Invariant condition has been restored."
+                f"• Details: {details}"
+            )
+        elif alert_type == "error":
+            message = (
+                f"⚠️ *Invariant Error Alert*\n"
+                f"• Target: {formatted_target}\n"
+                f"• Block: {block_number}\n"
+                f"• Error: ```{details}```"
+            )
+        else:
+            raise ValueError(f"Invalid alert type: {alert_type}")
+
+        self.slack.send_message(message)
+        self.last_message_update = time.time()
+
+    def handle_status_change(
+        self,
+        target: str,
+        old_status: Status,
+        new_status: Status,
+        block_number: int,
+        payload: Dict[str, Any]
+    ):
+        """
+        Determines which type of Slack alert to send based on status transition.
+
+        Parameters
+        ----------
+        target : str
+            The monitor target's identifier.
+        old_status : Status
+            The previous status.
+        new_status : Status
+            The new status.
+        block_number : int
+            The block number from the payload.
+        payload : Dict[str, Any]
+            The raw update payload.
+        """
+        # Transition into a violation state from a non-violation state.
+        if new_status == Status.VIOLATED and old_status in {Status.OK, Status.UNKNOWN, Status.ERROR}:
+            self.send_slack_alert("violation", target, block_number, details=payload, prev_status=old_status)
+        # Transition into a healthy state from a violation state.
+        elif new_status == Status.OK and old_status == Status.VIOLATED:
+            self.send_slack_alert("recovery", target, block_number, details=payload)
+        # In case of error status.
+        elif new_status == Status.ERROR:
+            self.send_slack_alert("error", target, block_number, details=payload)
+
+    def format_id(self, id: str) -> str:
+        """
+        Formats the monitor target's ID. By default, returns the raw id.
+        """
+        return id
 
     def check_no_violations(self, block_number: int):
         now = time.time()
         if now - self.last_message_update >= 3600:
             hour_start = datetime.fromtimestamp(self.last_message_update)
             hour_end = datetime.fromtimestamp(now)
-            msg = f"From {hour_start.strftime('%H:%M')} to {hour_end.strftime('%H:%M')} no new violations were recorded.\n"
-            msg += f"Last checked block number: {block_number}"
+            msg = (
+                f"ℹ️ *No Invariant Violations Detected*\n"
+                f"From {hour_start.strftime('%H:%M')} to {hour_end.strftime('%H:%M')}, no new violations were recorded.\n"
+                f"Last checked block: {block_number}"
+            )
             self.slack.send_message(msg)
             self.last_message_update = now
 
     def route(self, app: Flask):
-        """
-        Sets up three end points on app.
-        `/update`, which receives POST requests holding the invariant status messages and updates this dashboards internal state;
-        `/targets` which receives GET requests and returns a list of all monitor target ids for which this dashboard has data
-        `/status/<string:id>` which receives a GET request whith the URL parameter id, and returns the status of the invariant in a format
-        to be rendered on dashboard.html
-        """
         @app.route("/update", methods=["POST"])
         def update():
             if not request.is_json:
                 return jsonify({"error": "Request must be JSON"}), 400
             data = request.get_json()
             if self.id_key not in data:
-                return jsonify({"error": "missing id"}), 400
-            id = data[self.id_key]
-            if id not in self.state:
-                self.state[id] = InvariantStatus()
+                return jsonify({"error": "Missing id parameter"}), 400
+
+            target_id = data[self.id_key]
+            if target_id not in self.state:
+                self.state[target_id] = InvariantStatus()
                 try:
-                    name = self.format_id(id)
-                except:
-                    name = id
-                self.register_order.append({"id": id, "name": name})
-            old_state = self.state[id].status
-            self.state[id].update(data)
-            if self.state[id].status == Status.VIOLATED and old_state != Status.VIOLATED:
-                self.on_violation(id, data)
-            self.check_no_violations(self.state[id].block_number)
-            
+                    name = self.format_id(target_id)
+                except Exception:
+                    name = target_id
+                self.register_order.append({"id": target_id, "name": name})
+
+            old_status = self.state[target_id].status
+            self.state[target_id].update(data)
+            new_status = self.state[target_id].status
+            self.handle_status_change(target_id, old_status, new_status, self.state[target_id].block_number, data)
+            self.check_no_violations(self.state[target_id].block_number)
             return jsonify({"status": "accepted"}), 200
-        
+
         @app.route("/targets", methods=["GET"])
-        def target():
+        def targets():
             return jsonify(self.register_order), 200
-        
+
         @app.route("/status/<string:id>", methods=["GET"])
         def status(id):
             if id not in self.state:
                 return jsonify({"status": "not found"}), 400
-            return self.state[id].getStatus(self.formatters), 200
-
+            return jsonify(self.state[id].getStatus(self.formatters)), 200
