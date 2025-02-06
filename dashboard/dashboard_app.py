@@ -198,7 +198,6 @@ class InvariantStatus(object):
 
 class HexToDecimalFormatter(DetailValueFormatter):
     def format(self, key, value) -> str:
-        print(f"key: {key}, value: {value}")
         if type(value) != str:
             raise RuntimeError("Bad value")
         if value.startswith("0x"):
@@ -208,7 +207,6 @@ class HexToDecimalFormatter(DetailValueFormatter):
 
 class StringToIntFormatter(DetailValueFormatter):
     def format(self, key, value) -> str:
-        print(f"key: {key}, value: {value}")
         if type(value) != str:
             raise RuntimeError("Bad value")
         decimal = int(value)
@@ -257,7 +255,7 @@ class DashboardApp:
         """
         self.last_message_update = time.time()
         # Send a message to slack when a violation is detected for a monitor target
-        self.slack.send_message(f"Invariant violation detected for {self.format_id(id)}")
+        self.slack.send_message(f"New invariant violation detected for {self.format_id(id)}")
         self.slack.send_message(f"Details: {violation}")
 
     def format_id(self, id: str) -> str:
@@ -286,7 +284,7 @@ class DashboardApp:
         if now - self.last_message_update >= 3600:
             hour_start = datetime.fromtimestamp(self.last_message_update)
             hour_end = datetime.fromtimestamp(now)
-            msg = f"From {hour_start.strftime('%H:%M')} to {hour_end.strftime('%H:%M')} no violations were recorded.\n"
+            msg = f"From {hour_start.strftime('%H:%M')} to {hour_end.strftime('%H:%M')} no new violations were recorded.\n"
             msg += f"Last checked block number: {block_number}"
             self.slack.send_message(msg)
             self.last_message_update = now
