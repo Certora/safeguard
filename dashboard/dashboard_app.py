@@ -31,7 +31,7 @@ class Slack:
 
 
 # ---------------------------------------------------------------------
-# Formatters and Models for condition details remain unchanged
+# Formatters and Models for condition details
 # ---------------------------------------------------------------------
 
 class DetailValueFormatter(ABC):
@@ -140,7 +140,7 @@ class InvariantStatus:
         return result
 
 # ---------------------------------------------------------------------
-# Formatter helper objects (unchanged)
+# Formatter helper objects
 # ---------------------------------------------------------------------
 
 class HexToDecimalFormatter(DetailValueFormatter):
@@ -167,7 +167,7 @@ IntToDecimal = IntToDecimalFormatter()
 StringToInt = StringToIntFormatter()
 
 # ---------------------------------------------------------------------
-# DashboardApp with improved status message handling
+# DashboardApp with Slack alerts
 # ---------------------------------------------------------------------
 
 class DashboardApp:
