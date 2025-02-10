@@ -74,7 +74,7 @@ var storageOffsets = storageOffsetsT{
 	feeGrowthGlobal1OffsetFrom0: 1,
 	liquidityOffset:             3,
 
-	tickFeeGrowth0Offset:      2,
+	tickFeeGrowth0Offset:      1,
 	tickFeeGrowth1OffsetFrom0: 1,
 
 	feeGrowthInside0Offset: 1,
