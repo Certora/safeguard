@@ -162,7 +162,7 @@ func processLogs(
 			if !lb.poolFilter(poolId) {
 				continue
 			}
-			position := crypto.Keccak256Hash(l.Topics[1][10:32], l.Data[29:32], l.Data[32+29:32+32], l.Data[3*32:4*32])
+			position := crypto.Keccak256Hash(l.Topics[2][12:32], l.Data[29:32], l.Data[32+29:32+32], l.Data[3*32:4*32])
 			lb.onPosition(
 				abiToNativeTick(l.Data, 29),
 				abiToNativeTick(l.Data, 32+29),
@@ -188,7 +188,8 @@ func processLogs(
 			toAddress := common.BytesToAddress(l.Topics[2][:])
 			fromAddress := common.BytesToAddress(l.Topics[1][:])
 			amount := new(uint256.Int)
-			amount.SetBytes(l.Data)
+			amount.SetBytes(l.Data[32:64])
+
 			lb.onTransfer(tokenAddress, fromAddress, toAddress, amount)
 		} else {
 			continue
