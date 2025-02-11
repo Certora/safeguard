@@ -188,7 +188,8 @@ func processLogs(
 			toAddress := common.BytesToAddress(l.Topics[2][:])
 			fromAddress := common.BytesToAddress(l.Topics[1][:])
 			amount := new(uint256.Int)
-			amount.SetBytes(l.Data)
+			amount.SetBytes(l.Data[32:64])
+
 			lb.onTransfer(tokenAddress, fromAddress, toAddress, amount)
 		} else {
 			continue
