@@ -50,6 +50,10 @@ func NewStateProcessor(config *params.ChainConfig, chain *HeaderChain) *StatePro
 	}
 }
 
+func (bc *BlockChain) CurrentHead() *types.Header {
+	return bc.CurrentBlock()
+}
+
 // Implementation required by the BlockScan interface
 func (bc *BlockChain) ScanBlocks(lastJsonBlock uint64, ordered bool, cb func([]*types.Log) error) error {
 	currHead := bc.CurrentBlock()
@@ -163,7 +167,9 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 				block.GasLimit(),
 				vmenv,
 			)
-			err := safeguardImpl.impl.InvariantChecks(statedb, bc, *blockNumber, mr, allLogs)
+			err := safeguardImpl.impl.InvariantChecks(
+				statedb, bc, block, mr, allLogs,
+			)
 			if err != nil {
 				fmt.Printf("Safeguard checking failed with error: %s\n", err)
 			}
