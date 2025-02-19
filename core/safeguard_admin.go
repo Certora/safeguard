@@ -62,6 +62,9 @@ func (s *safeguardState) reload(p string) error {
 		return fmt.Errorf("Detector from %s was not an InvariantChecker, pausing checking", p)
 	}
 	fmt.Printf("Successfully loaded new implementation, updating pointer, and enabling\n")
+	if s.impl != nil {
+		s.impl.OnDispose()
+	}
 	s.enabled = true
 	s.impl = impl
 	return nil
