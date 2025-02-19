@@ -16,6 +16,9 @@ on:
 
 jobs:
   build:
+    strategy:
+      matrix:
+        plugin: ["uniswap", "aavev3"]
     runs-on: Linux-ARM64
     permissions:
       id-token: write
@@ -41,18 +44,13 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Set Plugin Name
-        run: echo "PLUGIN_NAME=${{ github.event.inputs.plugin_name || 'uniswap' }}" >> $GITHUB_ENV
-
       # Build images
       - name: Build docker image
         if: ${{ github.ref != 'refs/heads/safeguard' }}
-        run: |
-          echo "PLUGIN_NAME=$PLUGIN_NAME"
-          docker buildx bake --provenance=false --load
+        run: docker buildx bake --provenance=false --load
         env:
           COMMIT_SHA: ${{ github.sha }}
-          PLUGIN_NAME: ${{ env.PLUGIN_NAME }}
+          PLUGIN_NAME: ${{ matrix.plugin }}
           USE_CACHE: 1
 
       # Build images and push it
@@ -63,5 +61,5 @@ jobs:
           docker buildx bake --provenance=false --push
         env:
           COMMIT_SHA: ${{ github.sha }}
-          PLUGIN_NAME: ${{ env.PLUGIN_NAME }}
+          PLUGIN_NAME: ${{ matrix.plugin }}
           USE_CACHE: 1
