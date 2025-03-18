@@ -251,8 +251,8 @@ class DashboardApp:
                 block=block_number,
                 details=payload
             )
-        # In case of error status.
-        elif new_status == Status.ERROR:
+        # In case of error status - only when transitioning TO error from another state
+        elif new_status == Status.ERROR and old_status != Status.ERROR:
             message = self.slack.ERROR_MESSAGE_TEMPLATE.format(
                 transition_info=transition_info,
                 target=formatted_target,
