@@ -2,7 +2,6 @@ package main
 
 import (
 	"log/slog"
-	"math/big"
 
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -13,12 +12,12 @@ type UniswapDetector string
 
 func (u UniswapDetector) InvariantChecks(
 	statedb *state.StateDB,
-	bc etherapi.BlockScanner,
-	blockNumber big.Int,
+	bc etherapi.ChainProxy,
+	block *types.Block,
 	mr *etherapi.MockRunner,
 	allLogs []*types.Log,
 ) error {
-	return invariantChecks(statedb, bc, blockNumber, mr, allLogs)
+	return invariantChecks(statedb, bc, block, mr, allLogs)
 }
 
 func (u UniswapDetector) OnPause() {

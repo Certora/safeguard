@@ -146,7 +146,7 @@ POST:
     c. Further, each pool id in this list is guaranteed to appear in the token data's poolTokens.
     d. The (p,c1) pairs in the token's tokenPools satisfy invariant 7 of getMonitoredPools below
 */
-func (st *InvariantState) loadTokenPools(tokenAddress common.Address, bc etherapi.BlockScanner, currBlock uint64) ([]common.Hash, error) {
+func (st *InvariantState) loadTokenPools(tokenAddress common.Address, bc etherapi.ChainProxy, currBlock uint64) ([]common.Hash, error) {
 	result := make(map[string]interface{})
 	err := etherapi.QueryJsonEndpoint(fmt.Sprintf("token-pools/%s", strings.ToLower(tokenAddress.Hex())), &result)
 	tokenLogger := logger.With("token", tokenAddress)
@@ -246,7 +246,7 @@ func (st *InvariantState) loadTokenPools(tokenAddress common.Address, bc etherap
 	return ret, nil
 }
 
-func (st *InvariantState) loadPoolAndEnqueue(poolData *PoolState, key common.Hash, bc etherapi.BlockScanner, currBlock uint64, toMonitor *[]common.Hash, fresh *[]common.Hash) error {
+func (st *InvariantState) loadPoolAndEnqueue(poolData *PoolState, key common.Hash, bc etherapi.ChainProxy, currBlock uint64, toMonitor *[]common.Hash, fresh *[]common.Hash) error {
 	poolLogger := logger.With("pool", key)
 	if !poolData.ready {
 		hasPositions, err := st.loadInitialPositions(key, bc, currBlock)
@@ -295,7 +295,7 @@ POST STATE INVARIANTS:
     b. if c1 is true, then p's monitor1 field is true, and p's currency1 field is equal to t
     c. if c1 is false, then p's monitor0 field is true, and p's currency0 field is equal to t
 */
-func (st *InvariantState) getMonitoredPools(bc etherapi.BlockScanner, currBlock uint64) ([]common.Hash, []common.Hash, error) {
+func (st *InvariantState) getMonitoredPools(bc etherapi.ChainProxy, currBlock uint64) ([]common.Hash, []common.Hash, error) {
 	var tokenItems []interface{}
 	err := etherapi.QueryJsonEndpoint("token-targets", &tokenItems)
 	if err != nil {
@@ -437,6 +437,13 @@ func (st *InvariantState) Reset() {
 	st.tokenAddressToInfo = map[common.Address]*TokenState{}
 }
 
+func (st *InvariantState) ResetIncrementalState() {
+	for _, tok := range st.tokenAddressToInfo {
+		tok.poolBalanceOwed.Clear()
+		tok.poolBalances = make(map[common.Hash]*uint256.Int)
+	}
+}
+
 func (st *InvariantState) ResetPool(pool common.Hash) {
 	currState := st.poolIdToInfo[pool]
 	// TODO: tell the tokens about this somehow
@@ -471,7 +478,7 @@ POST:
  1. if this function returns false, then the pool is not ready
  2. otherwise, the pool is marked as ready, and all positions for the pool up until the current block (but excluding the most recent logs) have been registered.
 */
-func (st *InvariantState) loadInitialPositions(pool common.Hash, bc etherapi.BlockScanner, currBlock uint64) (bool, error) {
+func (st *InvariantState) loadInitialPositions(pool common.Hash, bc etherapi.ChainProxy, currBlock uint64) (bool, error) {
 	start := time.Now()
 	root := map[string]interface{}{}
 
@@ -939,13 +946,14 @@ var addressZeroPadding [12]byte
 
 func invariantChecks(
 	statedb *state.StateDB,
-	bc etherapi.BlockScanner,
-	blockNumber big.Int,
+	bc etherapi.ChainProxy,
+	block *types.Block,
 	mr *etherapi.MockRunner,
 	allLogs []*types.Log,
 ) error {
-	err := invariantChecksInner(statedb, bc, blockNumber, mr, allLogs)
+	err := invariantChecksInner(statedb, bc, block, mr, allLogs)
 	if err != nil {
+		prevBlockProcessed = nil
 		safeguardState.Reset()
 	}
 	return err
@@ -1054,13 +1062,16 @@ func getConditionResult(name string, status bool, values ...any) map[string]inte
 	}
 }
 
+var prevBlockProcessed *common.Hash = nil
+
 func invariantChecksInner(
 	statedb *state.StateDB,
-	bc etherapi.BlockScanner,
-	blockNumber big.Int,
+	bc etherapi.ChainProxy,
+	block *types.Block,
 	mr *etherapi.MockRunner,
 	allLogs []*types.Log,
 ) error {
+	blockNumber := *block.Number()
 	start := time.Now()
 	if safeguardState.poolIdToInfo == nil {
 		safeguardState.poolIdToInfo = make(map[common.Hash]*PoolState)
@@ -1072,8 +1083,19 @@ func invariantChecksInner(
 		return err
 	}
 	poolsNeedWork := make(map[common.Hash]bool)
+
+	isRewind := false
+
+	if prevBlockProcessed == nil || *prevBlockProcessed != block.Header().ParentHash {
+		logger.Info("Block rewind found", "prev", *prevBlockProcessed, "curr block parent", block.Header().ParentHash)
+		safeguardState.ResetIncrementalState()
+		isRewind = true
+	}
+	currBlockHashed := block.Hash()
+	prevBlockProcessed = &currBlockHashed
+
 	for _, p := range poolsToMonitor {
-		poolsNeedWork[p] = false
+		poolsNeedWork[p] = isRewind // force recomputation on everything if we have a reload
 	}
 	/*
 	 force a check for all pools that were newly loaded, we know that all such pools must exist in needsWork, by the invariant on getMonitoredPools
@@ -1101,9 +1123,12 @@ func invariantChecksInner(
 	   Find those tokens which do not have a running sum yet.
 	   Force all involved pools to recompute
 	*/
-	for _, tokenState := range safeguardState.tokenAddressToInfo {
+	for tid, tokenState := range safeguardState.tokenAddressToInfo {
 		if !tokenState.ready {
 			continue
+		}
+		if isRewind && !tokenState.poolBalanceOwed.IsZero() {
+			panic(fmt.Sprintf("Somehow didn't reset token state %s", tid))
 		}
 		for p, _ := range tokenState.poolTokens {
 			pState := safeguardState.poolIdToInfo[p]
@@ -1112,6 +1137,17 @@ func invariantChecksInner(
 			}
 			if _, exists := tokenState.poolBalances[p]; !exists {
 				poolsNeedWork[p] = true
+			}
+		}
+	}
+	// sanity check
+	if isRewind {
+		for p, pst := range safeguardState.poolIdToInfo {
+			if !pst.ready {
+				continue
+			}
+			if exists, work := poolsNeedWork[p]; !exists || !work {
+				panic(fmt.Sprintf("Should be recomputing everything on rewind, missed pool %s", p))
 			}
 		}
 	}

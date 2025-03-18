@@ -2,7 +2,6 @@ package main
 
 import (
 	"log/slog"
-	"math/big"
 
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -13,12 +12,12 @@ type AaveDetector string
 
 func (a AaveDetector) InvariantChecks(
 	statedb *state.StateDB,
-	bc etherapi.BlockScanner,
-	blockNumber big.Int,
+	bc etherapi.ChainProxy,
+	block *types.Block,
 	mr *etherapi.MockRunner,
 	allLogs []*types.Log,
 ) error {
-	return invariantChecks(blockNumber, statedb, mr)
+	return invariantChecks(*block.Number(), statedb, mr)
 }
 
 func (a AaveDetector) OnPause() {

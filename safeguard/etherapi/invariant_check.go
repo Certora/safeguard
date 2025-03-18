@@ -2,7 +2,6 @@ package etherapi
 
 import (
 	"log/slog"
-	"math/big"
 
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -25,8 +24,8 @@ type InvariantChecker interface {
 	*/
 	InvariantChecks(
 		statedb *state.StateDB,
-		bc BlockScanner,
-		blockNumber big.Int,
+		bc ChainProxy,
+		block *types.Block,
 		mr *MockRunner,
 		allLogs []*types.Log,
 	) error

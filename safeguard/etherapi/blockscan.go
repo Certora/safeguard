@@ -1,6 +1,10 @@
 package etherapi
 
-import "github.com/ethereum/go-ethereum/core/types"
+import (
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/types"
+)
 
 /*
 Main way that plugins can query into the internal core state (which is
@@ -9,7 +13,7 @@ disallowed by virtue of the plugins being in a different package.)
 Currently this wraps low-level operations around the BlockChain type, namely getting
 the current block header and traversing the chain looking for logs.
 */
-type BlockScanner interface {
+type ChainProxy interface {
 	/**
 	  Starting from the current block (that given by CurrentBlock), traverse the blockchain
 	  back until (but excluding) untilBlock. On each block encountered, the logs of that block
@@ -29,5 +33,7 @@ type BlockScanner interface {
 	   Return the header of the current block, i.e., the head of the block chain *before* the currently processed block
 	   is finalized)
 	*/
-	CurrentBlock() *types.Header
+	CurrentHead() *types.Header
+
+	StateAt(headerHash common.Hash) (*state.StateDB, error)
 }
