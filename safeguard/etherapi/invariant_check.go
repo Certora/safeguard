@@ -38,7 +38,7 @@ type InvariantChecker interface {
 	OnPause()
 
 	/*
-	  Called when a plugin is about to be disposed (FIXME: it's not actually called)
+	  Called when a plugin is about to be disposed
 	*/
 	OnDispose()
 
